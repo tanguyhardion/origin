@@ -37,6 +37,8 @@ export default function App() {
     [items, selected]
   );
 
+  const allItemsSelected = items.length > 0 && items.every((item) => selected.has(item.id));
+
   const loadItems = useCallback(async () => {
     if (!hasSupabaseConfig) return;
     setIsLoading(true);
@@ -196,10 +198,18 @@ export default function App() {
         triggerDownload(blob, `${folder}.zip`);
       }
 
-      await supabase
+      const downloadedAt = new Date().toISOString();
+      const { error: markError } = await supabase
         .from("origin_files")
-        .update({ downloaded_at: new Date().toISOString() })
+        .update({ downloaded_at: downloadedAt })
         .in("id", targets.map((item) => item.id));
+      if (markError) throw markError;
+
+      const { error: cleanupError } = await supabase.functions.invoke("delete-transfers", {
+        body: { ids: targets.map((item) => item.id) },
+      });
+      if (cleanupError) throw cleanupError;
+
       setSelected(new Set());
       loadItems();
     } catch (error) {
@@ -215,6 +225,10 @@ export default function App() {
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
+  }
+
+  function toggleSelectAll() {
+    setSelected(allItemsSelected ? new Set() : new Set(items.map((item) => item.id)));
   }
 
   const totalProgress = queue.length
@@ -296,9 +310,14 @@ export default function App() {
               <span className="eyebrow">Inbox</span>
               <h2>Recent uploads</h2>
             </div>
-            <button className="icon-button quiet" onClick={loadItems} title="Refresh">
-              {isLoading ? <Loader2 className="spin" size={18} /> : <RefreshCcw size={18} />}
-            </button>
+            <div className="section-actions">
+              <button className="bulk-button quiet" onClick={toggleSelectAll} disabled={!items.length}>
+                {allItemsSelected ? "Clear all" : "Select all"}
+              </button>
+              <button className="icon-button quiet" onClick={loadItems} title="Refresh">
+                {isLoading ? <Loader2 className="spin" size={18} /> : <RefreshCcw size={18} />}
+              </button>
+            </div>
           </div>
 
           {(!hasSupabaseConfig || setupWarning) && <Notice message={setupWarning} />}

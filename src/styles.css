@@ -35,6 +35,7 @@ button { border: 0; color: inherit; cursor: pointer; }
 
 .phone-stage { position: relative; z-index: 1; width: min(100%, 520px); margin: 0 auto; }
 .topbar, .section-title, .sheet-head, .action-dock { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.section-actions { display: flex; align-items: center; gap: 10px; }
 .brand-mark {
   display: inline-flex;
   align-items: center;
@@ -63,6 +64,15 @@ h2 { font-size: 28px; }
   display: grid; place-items: center;
 }
 .quiet { background: rgba(255,255,255,.07); }
+.bulk-button {
+  min-height: 46px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.08);
+  color: #f7f7fb;
+  font-weight: 750;
+}
+.bulk-button:disabled { opacity: .55; cursor: default; }
 
 .drop-zone {
   margin-top: 26px;
