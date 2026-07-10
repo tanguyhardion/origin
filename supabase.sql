@@ -34,7 +34,7 @@ for insert
 to anon
 with check (
   bucket = 'origin-transfers'
-  and expires_at <= now() + interval '15 minutes 30 seconds'
+  and expires_at <= now() + interval '30 minutes 30 seconds'
 );
 
 drop policy if exists "Origin public mark downloaded" on public.origin_files;
