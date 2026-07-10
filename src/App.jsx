@@ -19,7 +19,7 @@ import {
 import { BUCKET, hasSupabaseConfig, supabase } from "./supabase";
 import { formatBytes, timeRemaining, transferName, triggerDownload, uniquePath } from "./utils";
 
-const EXPIRY_MINUTES = 15;
+const EXPIRY_MINUTES = 30;
 
 export default function App() {
   const [queue, setQueue] = useState([]);
