@@ -51,6 +51,28 @@ h1, h2 { margin: 5px 0 0; line-height: .96; letter-spacing: 0; }
 h1 { max-width: 330px; font-size: clamp(42px, 13vw, 68px); }
 h2 { font-size: 28px; }
 
+.inbox-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.count-pill {
+  min-width: 34px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(116, 242, 208, 0.14);
+  border: 1px solid rgba(116, 242, 208, 0.28);
+  color: #b8fff0;
+  font-size: 14px;
+  font-weight: 850;
+}
+
 .glass {
   background: rgba(20, 22, 31, 0.66);
   border: 1px solid rgba(255,255,255,.12);

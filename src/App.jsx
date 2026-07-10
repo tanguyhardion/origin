@@ -37,6 +37,7 @@ export default function App() {
     [items, selected]
   );
 
+  const inboxCount = items.length;
   const allItemsSelected = items.length > 0 && items.every((item) => selected.has(item.id));
 
   const loadItems = useCallback(async () => {
@@ -53,9 +54,15 @@ export default function App() {
       setItems([]);
     } else {
       setSetupWarning("");
-      const rows = data || [];
+      const rows = (data || []).filter((item) => item.mime_type !== "chunk/part");
       const withPreviews = await Promise.all(
         rows.map(async (item) => {
+          if (item.mime_type?.includes(";chunks=")) {
+            return {
+              ...item,
+              preview_url: null,
+            };
+          }
           const { data: signed } = await supabase.storage
             .from(BUCKET)
             .createSignedUrl(item.storage_path, 60 * 60);
@@ -106,6 +113,84 @@ export default function App() {
     ]);
   }
 
+  async function downloadFile(item) {
+    if (item.mime_type?.includes(";chunks=")) {
+      const match = item.mime_type.match(/;chunks=(\d+)/);
+      const numChunks = match ? parseInt(match[1], 10) : 0;
+      const chunkBlobs = [];
+      for (let i = 0; i < numChunks; i++) {
+        const chunkPath = `${item.storage_path}.part_${i}`;
+        const { data, error } = await supabase.storage.from(BUCKET).download(chunkPath);
+        if (error) throw error;
+        chunkBlobs.push(data);
+      }
+      return new Blob(chunkBlobs, { type: item.mime_type.split(";")[0] });
+    } else {
+      const { data, error } = await supabase.storage.from(BUCKET).download(item.storage_path);
+      if (error) throw error;
+      return data;
+    }
+  }
+
+  async function downloadSelected(targets = selectedItems) {
+    if (!targets.length || downloading) return;
+    setDownloading(true);
+
+    try {
+      if (targets.length === 1) {
+        const item = targets[0];
+        const data = await downloadFile(item);
+        triggerDownload(data, item.file_name);
+      } else {
+        const { default: JSZip } = await import("jszip");
+        const folder = targets[0]?.session_name || transferName();
+        const zip = new JSZip();
+        const root = zip.folder(folder);
+        for (const item of targets) {
+          const data = await downloadFile(item);
+          root.file(item.file_name, data);
+        }
+        const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
+        triggerDownload(blob, `${folder}.zip`);
+      }
+
+      const downloadedAt = new Date().toISOString();
+      const idsToMark = [...targets.map((item) => item.id)];
+      for (const item of targets) {
+        if (item.mime_type?.includes(";chunks=")) {
+          const { data: chunkRows } = await supabase
+            .from("origin_files")
+            .select("id")
+            .eq("session_id", item.session_id)
+            .like("storage_path", `${item.storage_path}.part_%`);
+          if (chunkRows) {
+            idsToMark.push(...chunkRows.map((c) => c.id));
+          }
+        }
+      }
+
+      const { error: markError } = await supabase
+        .from("origin_files")
+        .update({ downloaded_at: downloadedAt })
+        .in("id", idsToMark);
+      if (markError) throw markError;
+
+      const { error: cleanupError } = await supabase.functions.invoke("delete-transfers", {
+        body: { ids: idsToMark },
+      });
+      if (cleanupError) throw cleanupError;
+
+      setSelected(new Set());
+      loadItems();
+    } catch (error) {
+      setToast(error.message || "Download failed.");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  const CHUNK_SIZE = 45 * 1024 * 1024; // 45 MB
+
   async function uploadQueue() {
     if (!hasSupabaseConfig) {
       setToast("Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE to .env first.");
@@ -120,103 +205,173 @@ export default function App() {
 
     for (const entry of queue) {
       const storagePath = uniquePath(sessionId, entry.file);
+      const file = entry.file;
+      const isChunked = file.size > CHUNK_SIZE;
+
+      let uploadError = null;
+      let registeredRows = [];
+
+      if (isChunked) {
+        const numChunks = Math.ceil(file.size / CHUNK_SIZE);
+        const uploadedPaths = [];
+
+        for (let i = 0; i < numChunks; i++) {
+          const start = i * CHUNK_SIZE;
+          const end = Math.min(start + CHUNK_SIZE, file.size);
+          const chunk = file.slice(start, end);
+          const chunkStoragePath = `${storagePath}.part_${i}`;
+
+          setQueue((current) =>
+            current.map((f) =>
+              f.id === entry.id
+                ? {
+                    ...f,
+                    status: "uploading",
+                    progress: Math.round(((i + 0.5) / numChunks) * 80),
+                  }
+                : f
+            )
+          );
+
+          const { error } = await supabase.storage.from(BUCKET).upload(chunkStoragePath, chunk, {
+            contentType: entry.file.type || "application/octet-stream",
+            cacheControl: "3600",
+            upsert: false,
+          });
+
+          if (error) {
+            uploadError = error;
+            break;
+          }
+
+          uploadedPaths.push(chunkStoragePath);
+
+          setQueue((current) =>
+            current.map((f) =>
+              f.id === entry.id
+                ? {
+                    ...f,
+                    status: "uploading",
+                    progress: Math.round(((i + 1) / numChunks) * 80),
+                  }
+                : f
+            )
+          );
+        }
+
+        if (uploadError) {
+          if (uploadedPaths.length > 0) {
+            await supabase.storage.from(BUCKET).remove(uploadedPaths);
+          }
+          setQueue((current) =>
+            current.map((f) =>
+              f.id === entry.id ? { ...f, status: "error", progress: 0 } : f
+            )
+          );
+          setToast(uploadError.message);
+          continue;
+        }
+
+        const mainRow = {
+          session_id: sessionId,
+          session_name: sessionName,
+          bucket: BUCKET,
+          storage_path: storagePath,
+          file_name: entry.file.name,
+          mime_type: `${entry.file.type || "application/octet-stream"};chunks=${numChunks}`,
+          file_size: entry.file.size,
+          expires_at: expiresAt,
+        };
+
+        const chunkRows = [];
+        for (let i = 0; i < numChunks; i++) {
+          chunkRows.push({
+            session_id: sessionId,
+            session_name: sessionName,
+            bucket: BUCKET,
+            storage_path: `${storagePath}.part_${i}`,
+            file_name: `${entry.file.name}.part_${i}`,
+            mime_type: "chunk/part",
+            file_size: Math.min(CHUNK_SIZE, file.size - i * CHUNK_SIZE),
+            expires_at: expiresAt,
+          });
+        }
+
+        registeredRows = [mainRow, ...chunkRows];
+      } else {
+        setQueue((current) =>
+          current.map((file) =>
+            file.id === entry.id ? { ...file, status: "uploading", progress: 18 } : file
+          )
+        );
+
+        const { error } = await supabase.storage.from(BUCKET).upload(storagePath, entry.file, {
+          contentType: entry.file.type || "application/octet-stream",
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+        if (error) {
+          setQueue((current) =>
+            current.map((file) =>
+              file.id === entry.id ? { ...file, status: "error", progress: 0 } : file
+            )
+          );
+          setToast(error.message);
+          continue;
+        }
+
+        registeredRows = [
+          {
+            session_id: sessionId,
+            session_name: sessionName,
+            bucket: BUCKET,
+            storage_path: storagePath,
+            file_name: entry.file.name,
+            mime_type: entry.file.type || "application/octet-stream",
+            file_size: entry.file.size,
+            expires_at: expiresAt,
+          },
+        ];
+      }
+
       setQueue((current) =>
         current.map((file) =>
-          file.id === entry.id ? { ...file, status: "uploading", progress: 18 } : file
+          file.id === entry.id ? { ...file, status: "saving", progress: 85 } : file
         )
       );
 
-      const { error } = await supabase.storage.from(BUCKET).upload(storagePath, entry.file, {
-        contentType: entry.file.type || "application/octet-stream",
-        cacheControl: "3600",
-        upsert: false,
-      });
+      const { error: dbError } = await supabase.from("origin_files").insert(registeredRows);
 
-      if (error) {
+      if (dbError) {
+        if (isChunked) {
+          const chunkPaths = [];
+          for (let i = 0; i < Math.ceil(file.size / CHUNK_SIZE); i++) {
+            chunkPaths.push(`${storagePath}.part_${i}`);
+          }
+          await supabase.storage.from(BUCKET).remove(chunkPaths);
+        } else {
+          await supabase.storage.from(BUCKET).remove([storagePath]);
+        }
+
         setQueue((current) =>
           current.map((file) =>
             file.id === entry.id ? { ...file, status: "error", progress: 0 } : file
           )
         );
-        setToast(error.message);
-        continue;
+        setToast(dbError.message);
+      } else {
+        setQueue((current) =>
+          current.map((file) =>
+            file.id === entry.id ? { ...file, status: "done", progress: 100 } : file
+          )
+        );
       }
-
-      setQueue((current) =>
-        current.map((file) =>
-          file.id === entry.id ? { ...file, status: "saving", progress: 82 } : file
-        )
-      );
-
-      const { error: dbError } = await supabase.from("origin_files").insert({
-        session_id: sessionId,
-        session_name: sessionName,
-        bucket: BUCKET,
-        storage_path: storagePath,
-        file_name: entry.file.name,
-        mime_type: entry.file.type || "application/octet-stream",
-        file_size: entry.file.size,
-        expires_at: expiresAt,
-      });
-
-      setQueue((current) =>
-        current.map((file) =>
-          file.id === entry.id
-            ? { ...file, status: dbError ? "error" : "done", progress: dbError ? 0 : 100 }
-            : file
-        )
-      );
-      if (dbError) setToast(dbError.message);
     }
 
     setIsUploading(false);
     setTimeout(() => setQueue((current) => current.filter((file) => file.status !== "done")), 900);
     loadItems();
-  }
-
-  async function downloadSelected(targets = selectedItems) {
-    if (!targets.length || downloading) return;
-    setDownloading(true);
-
-    try {
-      if (targets.length === 1) {
-        const item = targets[0];
-        const { data, error } = await supabase.storage.from(BUCKET).download(item.storage_path);
-        if (error) throw error;
-        triggerDownload(data, item.file_name);
-      } else {
-        const { default: JSZip } = await import("jszip");
-        const folder = targets[0]?.session_name || transferName();
-        const zip = new JSZip();
-        const root = zip.folder(folder);
-        for (const item of targets) {
-          const { data, error } = await supabase.storage.from(BUCKET).download(item.storage_path);
-          if (error) throw error;
-          root.file(item.file_name, data);
-        }
-        const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
-        triggerDownload(blob, `${folder}.zip`);
-      }
-
-      const downloadedAt = new Date().toISOString();
-      const { error: markError } = await supabase
-        .from("origin_files")
-        .update({ downloaded_at: downloadedAt })
-        .in("id", targets.map((item) => item.id));
-      if (markError) throw markError;
-
-      const { error: cleanupError } = await supabase.functions.invoke("delete-transfers", {
-        body: { ids: targets.map((item) => item.id) },
-      });
-      if (cleanupError) throw cleanupError;
-
-      setSelected(new Set());
-      loadItems();
-    } catch (error) {
-      setToast(error.message || "Download failed.");
-    } finally {
-      setDownloading(false);
-    }
   }
 
   function toggleSelected(id) {
@@ -308,7 +463,12 @@ export default function App() {
           <div className="section-title">
             <div>
               <span className="eyebrow">Inbox</span>
-              <h2>Recent uploads</h2>
+              <div className="inbox-title-row">
+                <h2>Recent uploads</h2>
+                <span className="count-pill" aria-label={`${inboxCount} files in inbox`}>
+                  {inboxCount}
+                </span>
+              </div>
             </div>
             <div className="section-actions">
               <button className="bulk-button quiet" onClick={toggleSelectAll} disabled={!items.length}>
