@@ -89,3 +89,31 @@ select cron.schedule(
   '* * * * *',
   $$select public.origin_cleanup_expired();$$
 );
+
+create or replace function public.delete_transfers(file_ids uuid[])
+returns void
+language plpgsql
+security definer
+set search_path = public, storage
+as $$
+declare
+  paths_to_delete text[];
+begin
+  -- 1. Gather the storage paths of the files to delete
+  select coalesce(array_agg(storage_path), array[]::text[])
+  into paths_to_delete
+  from public.origin_files
+  where id = any(file_ids);
+
+  if array_length(paths_to_delete, 1) is not null then
+    -- 2. Delete the storage objects
+    delete from storage.objects
+    where bucket_id = 'origin-transfers'
+      and name = any(paths_to_delete);
+  end if;
+
+  -- 3. Delete the database rows
+  delete from public.origin_files
+  where id = any(file_ids);
+end;
+$$;

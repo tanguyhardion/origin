@@ -175,8 +175,8 @@ export default function App() {
         .in("id", idsToMark);
       if (markError) throw markError;
 
-      const { error: cleanupError } = await supabase.functions.invoke("delete-transfers", {
-        body: { ids: idsToMark },
+      const { error: cleanupError } = await supabase.rpc("delete_transfers", {
+        file_ids: idsToMark,
       });
       if (cleanupError) throw cleanupError;
 
