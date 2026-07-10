@@ -498,7 +498,7 @@ export default function App() {
               <div className="empty-state">
                 <Image size={38} />
                 <strong>No live transfers</strong>
-                <span>Files appear here instantly after upload and expire in 15 minutes.</span>
+                <span>Files appear here instantly after upload and expire in 30 minutes.</span>
               </div>
             )}
           </div>
