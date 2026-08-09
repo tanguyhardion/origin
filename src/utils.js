@@ -33,3 +33,20 @@ export function triggerDownload(blob, filename) {
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+export function isActiveTransfer(expiresAt, now = new Date()) {
+  return new Date(expiresAt).getTime() > now.getTime();
+}
+
+export async function filterDisplayableItems(rows, resolveItem) {
+  const now = new Date();
+  const visible = await Promise.all(
+    (rows || []).map(async (item) => {
+      if (!isActiveTransfer(item.expires_at, now) || item.mime_type === "chunk/part") return null;
+      const resolved = await resolveItem(item);
+      return resolved?.exists ? resolved.item : null;
+    })
+  );
+
+  return visible.filter(Boolean);
+}

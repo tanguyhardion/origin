@@ -17,7 +17,14 @@ import {
   X,
 } from "lucide-react";
 import { BUCKET, hasSupabaseConfig, supabase } from "./supabase";
-import { formatBytes, timeRemaining, transferName, triggerDownload, uniquePath } from "./utils";
+import {
+  filterDisplayableItems,
+  formatBytes,
+  timeRemaining,
+  transferName,
+  triggerDownload,
+  uniquePath,
+} from "./utils";
 
 const EXPIRY_MINUTES = 30;
 
@@ -54,26 +61,34 @@ export default function App() {
       setItems([]);
     } else {
       setSetupWarning("");
-      const rows = (data || []).filter((item) => item.mime_type !== "chunk/part");
-      const withPreviews = await Promise.all(
-        rows.map(async (item) => {
-          if (item.mime_type?.includes(";chunks=")) {
-            return {
-              ...item,
-              preview_url: null,
-            };
+      const withPreviews = await filterDisplayableItems(data || [], async (item) => {
+        if (item.mime_type?.includes(";chunks=")) {
+          const match = item.mime_type.match(/;chunks=(\d+)/);
+          const numChunks = match ? parseInt(match[1], 10) : 0;
+          for (let i = 0; i < numChunks; i++) {
+            const chunkPath = `${item.storage_path}.part_${i}`;
+            const { error: chunkError } = await supabase.storage
+              .from(BUCKET)
+              .createSignedUrl(chunkPath, 60);
+            if (chunkError) return { exists: false };
           }
-          const { data: signed } = await supabase.storage
-            .from(BUCKET)
-            .createSignedUrl(item.storage_path, 60 * 60);
-          return {
+          return { exists: true, item: { ...item, preview_url: null } };
+        }
+
+        const { data: signed, error: signedError } = await supabase.storage
+          .from(BUCKET)
+          .createSignedUrl(item.storage_path, 60 * 60);
+        if (signedError) return { exists: false };
+        return {
+          exists: true,
+          item: {
             ...item,
             preview_url:
               signed?.signedUrl ||
               supabase.storage.from(BUCKET).getPublicUrl(item.storage_path).data.publicUrl,
-          };
-        })
-      );
+          },
+        };
+      });
       setItems(withPreviews);
     }
     setIsLoading(false);
