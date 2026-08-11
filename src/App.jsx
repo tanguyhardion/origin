@@ -1,409 +1,158 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { motion } from "framer-motion";
 import {
   Check,
-  Cloud,
   Download,
-  FileArchive,
   Image,
   Loader2,
-  Play,
   Plus,
+  QrCode,
   RefreshCcw,
-  ShieldCheck,
-  Trash2,
-  UploadCloud,
+  Send,
+  Smartphone,
   Video,
   X,
 } from "lucide-react";
-import { BUCKET, hasSupabaseConfig, supabase } from "./supabase";
-import {
-  filterDisplayableItems,
-  formatBytes,
-  timeRemaining,
-  transferName,
-  triggerDownload,
-  uniquePath,
-} from "./utils";
+import { QRCodeSVG } from "qrcode.react";
+import { P2PTransfer } from "./p2p";
+import { encodeTransferPayload, generateTransferCode, parseTransferPayload } from "./transferCode";
+import { formatBytes, transferName, triggerDownload } from "./utils";
 
-const EXPIRY_MINUTES = 30;
+function defaultServerUrl() {
+  const host = window.location.hostname || "localhost";
+  return `ws://${host}:3001`;
+}
 
 export default function App() {
+  const [mode, setMode] = useState("sender");
   const [queue, setQueue] = useState([]);
-  const [items, setItems] = useState([]);
-  const [selected, setSelected] = useState(new Set());
-  const [isUploading, setIsUploading] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-  const [setupWarning, setSetupWarning] = useState("");
+  const [received, setReceived] = useState([]);
+  const [serverUrl, setServerUrl] = useState(defaultServerUrl);
+  const [transferCode, setTransferCode] = useState("");
+  const [connectCode, setConnectCode] = useState("");
+  const [status, setStatus] = useState("idle");
   const [toast, setToast] = useState("");
+  const [progress, setProgress] = useState(0);
+  const [isSending, setIsSending] = useState(false);
   const fileInputRef = useRef(null);
-
-  const selectedItems = useMemo(
-    () => items.filter((item) => selected.has(item.id)),
-    [items, selected]
-  );
-
-  const inboxCount = items.length;
-  const allItemsSelected = items.length > 0 && items.every((item) => selected.has(item.id));
-
-  const loadItems = useCallback(async () => {
-    if (!hasSupabaseConfig) return;
-    setIsLoading(true);
-    const { data, error } = await supabase
-      .from("origin_files")
-      .select("*")
-      .gt("expires_at", new Date().toISOString())
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      setSetupWarning(error.message);
-      setItems([]);
-    } else {
-      setSetupWarning("");
-      const withPreviews = await filterDisplayableItems(data || [], async (item) => {
-        if (item.mime_type?.includes(";chunks=")) {
-          const match = item.mime_type.match(/;chunks=(\d+)/);
-          const numChunks = match ? parseInt(match[1], 10) : 0;
-          for (let i = 0; i < numChunks; i++) {
-            const chunkPath = `${item.storage_path}.part_${i}`;
-            const { error: chunkError } = await supabase.storage
-              .from(BUCKET)
-              .createSignedUrl(chunkPath, 60);
-            if (chunkError) return { exists: false };
-          }
-          return { exists: true, item: { ...item, preview_url: null } };
-        }
-
-        const { data: signed, error: signedError } = await supabase.storage
-          .from(BUCKET)
-          .createSignedUrl(item.storage_path, 60 * 60);
-        if (signedError) return { exists: false };
-        return {
-          exists: true,
-          item: {
-            ...item,
-            preview_url:
-              signed?.signedUrl ||
-              supabase.storage.from(BUCKET).getPublicUrl(item.storage_path).data.publicUrl,
-          },
-        };
-      });
-      setItems(withPreviews);
-    }
-    setIsLoading(false);
-  }, []);
+  const transferRef = useRef(null);
 
   useEffect(() => {
-    loadItems();
-    const timer = setInterval(loadItems, 20000);
-    const tick = setInterval(() => setItems((current) => [...current]), 1000);
     return () => {
-      clearInterval(timer);
-      clearInterval(tick);
+      transferRef.current?.destroy();
+      queue.forEach((entry) => URL.revokeObjectURL(entry.previewUrl));
     };
-  }, [loadItems]);
-
-  useEffect(() => {
-    return () => queue.forEach((file) => URL.revokeObjectURL(file.previewUrl));
   }, [queue]);
+
+  const totalBytes = useMemo(
+    () => queue.reduce((sum, entry) => sum + entry.file.size, 0),
+    [queue]
+  );
 
   function addFiles(files) {
     const next = Array.from(files || []).filter(
       (file) => file.type.startsWith("image/") || file.type.startsWith("video/")
     );
-    if (!next.length) return;
+
+    if (!next.length) {
+      setToast("Select photos or videos to transfer.");
+      return;
+    }
+
     setQueue((current) => [
       ...current,
       ...next.map((file) => ({
         id: crypto.randomUUID(),
         file,
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        progress: 0,
-        status: "ready",
         previewUrl: URL.createObjectURL(file),
       })),
     ]);
   }
 
-  async function downloadFile(item) {
-    if (item.mime_type?.includes(";chunks=")) {
-      const match = item.mime_type.match(/;chunks=(\d+)/);
-      const numChunks = match ? parseInt(match[1], 10) : 0;
-      const chunkBlobs = [];
-      for (let i = 0; i < numChunks; i++) {
-        const chunkPath = `${item.storage_path}.part_${i}`;
-        const { data, error } = await supabase.storage.from(BUCKET).download(chunkPath);
-        if (error) throw error;
-        chunkBlobs.push(data);
-      }
-      return new Blob(chunkBlobs, { type: item.mime_type.split(";")[0] });
-    } else {
-      const { data, error } = await supabase.storage.from(BUCKET).download(item.storage_path);
-      if (error) throw error;
-      return data;
-    }
+  function connectAsSender() {
+    transferRef.current?.destroy();
+    const code = generateTransferCode();
+    setTransferCode(code);
+    setStatus("waiting-for-receiver");
+    setProgress(0);
+
+    const transfer = new P2PTransfer({
+      code,
+      role: "sender",
+      serverUrl,
+      onStatus: setStatus,
+      onError: (message) => setToast(message),
+      onProgress: ({ percent }) => setProgress(percent),
+    });
+
+    transfer.connect();
+    transferRef.current = transfer;
   }
 
-  async function downloadSelected(targets = selectedItems) {
-    if (!targets.length || downloading) return;
-    setDownloading(true);
-
-    try {
-      if (targets.length === 1) {
-        const item = targets[0];
-        const data = await downloadFile(item);
-        triggerDownload(data, item.file_name);
-      } else {
-        const { default: JSZip } = await import("jszip");
-        const folder = targets[0]?.session_name || transferName();
-        const zip = new JSZip();
-        const root = zip.folder(folder);
-        for (const item of targets) {
-          const data = await downloadFile(item);
-          root.file(item.file_name, data);
-        }
-        const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
-        triggerDownload(blob, `${folder}.zip`);
-      }
-
-      const downloadedAt = new Date().toISOString();
-      const idsToMark = [...targets.map((item) => item.id)];
-      for (const item of targets) {
-        if (item.mime_type?.includes(";chunks=")) {
-          const { data: chunkRows } = await supabase
-            .from("origin_files")
-            .select("id")
-            .eq("session_id", item.session_id)
-            .like("storage_path", `${item.storage_path}.part_%`);
-          if (chunkRows) {
-            idsToMark.push(...chunkRows.map((c) => c.id));
-          }
-        }
-      }
-
-      const { error: markError } = await supabase
-        .from("origin_files")
-        .update({ downloaded_at: downloadedAt })
-        .in("id", idsToMark);
-      if (markError) throw markError;
-
-      const { error: cleanupError } = await supabase.rpc("delete_transfers", {
-        file_ids: idsToMark,
-      });
-      if (cleanupError) throw cleanupError;
-
-      setSelected(new Set());
-      loadItems();
-    } catch (error) {
-      setToast(error.message || "Download failed.");
-    } finally {
-      setDownloading(false);
-    }
-  }
-
-  const CHUNK_SIZE = 45 * 1024 * 1024; // 45 MB
-
-  async function uploadQueue() {
-    if (!hasSupabaseConfig) {
-      setToast("Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE to .env first.");
+  function connectAsReceiver() {
+    const parsed = parseTransferPayload(connectCode);
+    if (!parsed.code) {
+      setToast("Enter a transfer code.");
       return;
     }
-    if (!queue.length || isUploading) return;
 
-    setIsUploading(true);
-    const sessionId = crypto.randomUUID();
-    const sessionName = transferName();
-    const expiresAt = new Date(Date.now() + EXPIRY_MINUTES * 60000).toISOString();
+    transferRef.current?.destroy();
+    setStatus("connecting");
+    setProgress(0);
 
-    for (const entry of queue) {
-      const storagePath = uniquePath(sessionId, entry.file);
-      const file = entry.file;
-      const isChunked = file.size > CHUNK_SIZE;
-
-      let uploadError = null;
-      let registeredRows = [];
-
-      if (isChunked) {
-        const numChunks = Math.ceil(file.size / CHUNK_SIZE);
-        const uploadedPaths = [];
-
-        for (let i = 0; i < numChunks; i++) {
-          const start = i * CHUNK_SIZE;
-          const end = Math.min(start + CHUNK_SIZE, file.size);
-          const chunk = file.slice(start, end);
-          const chunkStoragePath = `${storagePath}.part_${i}`;
-
-          setQueue((current) =>
-            current.map((f) =>
-              f.id === entry.id
-                ? {
-                    ...f,
-                    status: "uploading",
-                    progress: Math.round(((i + 0.5) / numChunks) * 80),
-                  }
-                : f
-            )
-          );
-
-          const { error } = await supabase.storage.from(BUCKET).upload(chunkStoragePath, chunk, {
-            contentType: entry.file.type || "application/octet-stream",
-            cacheControl: "3600",
-            upsert: false,
-          });
-
-          if (error) {
-            uploadError = error;
-            break;
-          }
-
-          uploadedPaths.push(chunkStoragePath);
-
-          setQueue((current) =>
-            current.map((f) =>
-              f.id === entry.id
-                ? {
-                    ...f,
-                    status: "uploading",
-                    progress: Math.round(((i + 1) / numChunks) * 80),
-                  }
-                : f
-            )
-          );
-        }
-
-        if (uploadError) {
-          if (uploadedPaths.length > 0) {
-            await supabase.storage.from(BUCKET).remove(uploadedPaths);
-          }
-          setQueue((current) =>
-            current.map((f) =>
-              f.id === entry.id ? { ...f, status: "error", progress: 0 } : f
-            )
-          );
-          setToast(uploadError.message);
-          continue;
-        }
-
-        const mainRow = {
-          session_id: sessionId,
-          session_name: sessionName,
-          bucket: BUCKET,
-          storage_path: storagePath,
-          file_name: entry.file.name,
-          mime_type: `${entry.file.type || "application/octet-stream"};chunks=${numChunks}`,
-          file_size: entry.file.size,
-          expires_at: expiresAt,
-        };
-
-        const chunkRows = [];
-        for (let i = 0; i < numChunks; i++) {
-          chunkRows.push({
-            session_id: sessionId,
-            session_name: sessionName,
-            bucket: BUCKET,
-            storage_path: `${storagePath}.part_${i}`,
-            file_name: `${entry.file.name}.part_${i}`,
-            mime_type: "chunk/part",
-            file_size: Math.min(CHUNK_SIZE, file.size - i * CHUNK_SIZE),
-            expires_at: expiresAt,
-          });
-        }
-
-        registeredRows = [mainRow, ...chunkRows];
-      } else {
-        setQueue((current) =>
-          current.map((file) =>
-            file.id === entry.id ? { ...file, status: "uploading", progress: 18 } : file
-          )
-        );
-
-        const { error } = await supabase.storage.from(BUCKET).upload(storagePath, entry.file, {
-          contentType: entry.file.type || "application/octet-stream",
-          cacheControl: "3600",
-          upsert: false,
-        });
-
-        if (error) {
-          setQueue((current) =>
-            current.map((file) =>
-              file.id === entry.id ? { ...file, status: "error", progress: 0 } : file
-            )
-          );
-          setToast(error.message);
-          continue;
-        }
-
-        registeredRows = [
+    const transfer = new P2PTransfer({
+      code: parsed.code,
+      role: "receiver",
+      serverUrl: parsed.serverUrl || serverUrl,
+      onStatus: setStatus,
+      onError: (message) => setToast(message),
+      onProgress: ({ percent }) => setProgress(percent),
+      onFile: (file) => {
+        triggerDownload(file.blob, file.name);
+        setReceived((current) => [
           {
-            session_id: sessionId,
-            session_name: sessionName,
-            bucket: BUCKET,
-            storage_path: storagePath,
-            file_name: entry.file.name,
-            mime_type: entry.file.type || "application/octet-stream",
-            file_size: entry.file.size,
-            expires_at: expiresAt,
+            id: crypto.randomUUID(),
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            blob: file.blob,
           },
-        ];
-      }
+          ...current,
+        ]);
+      },
+    });
 
-      setQueue((current) =>
-        current.map((file) =>
-          file.id === entry.id ? { ...file, status: "saving", progress: 85 } : file
-        )
-      );
+    transfer.connect();
+    transferRef.current = transfer;
+  }
 
-      const { error: dbError } = await supabase.from("origin_files").insert(registeredRows);
-
-      if (dbError) {
-        if (isChunked) {
-          const chunkPaths = [];
-          for (let i = 0; i < Math.ceil(file.size / CHUNK_SIZE); i++) {
-            chunkPaths.push(`${storagePath}.part_${i}`);
-          }
-          await supabase.storage.from(BUCKET).remove(chunkPaths);
-        } else {
-          await supabase.storage.from(BUCKET).remove([storagePath]);
-        }
-
-        setQueue((current) =>
-          current.map((file) =>
-            file.id === entry.id ? { ...file, status: "error", progress: 0 } : file
-          )
-        );
-        setToast(dbError.message);
-      } else {
-        setQueue((current) =>
-          current.map((file) =>
-            file.id === entry.id ? { ...file, status: "done", progress: 100 } : file
-          )
-        );
-      }
+  async function sendQueuedFiles() {
+    const transfer = transferRef.current;
+    if (!transfer) {
+      setToast("Start a sender session first.");
+      return;
+    }
+    if (!queue.length) {
+      setToast("No files queued.");
+      return;
     }
 
-    setIsUploading(false);
-    setTimeout(() => setQueue((current) => current.filter((file) => file.status !== "done")), 900);
-    loadItems();
+    setIsSending(true);
+    try {
+      await transfer.sendFiles(queue.map((entry) => entry.file));
+      queue.forEach((entry) => URL.revokeObjectURL(entry.previewUrl));
+      setQueue([]);
+      setToast("Transfer complete.");
+    } catch (error) {
+      setToast(error.message || "Transfer failed.");
+    } finally {
+      setIsSending(false);
+    }
   }
 
-  function toggleSelected(id) {
-    setSelected((current) => {
-      const next = new Set(current);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }
-
-  function toggleSelectAll() {
-    setSelected(allItemsSelected ? new Set() : new Set(items.map((item) => item.id)));
-  }
-
-  const totalProgress = queue.length
-    ? Math.round(queue.reduce((sum, file) => sum + file.progress, 0) / queue.length)
-    : 0;
+  const qrPayload = transferCode
+    ? encodeTransferPayload({ code: transferCode, serverUrl })
+    : "";
 
   return (
     <main className="app-shell">
@@ -411,220 +160,197 @@ export default function App() {
       <section className="phone-stage">
         <header className="topbar">
           <span className="brand-mark">
-            <Cloud size={18} />
+            <Smartphone size={18} />
             <strong>Origin</strong>
           </span>
+          <div className="section-actions">
+            <button className={`bulk-button quiet ${mode === "sender" ? "active" : ""}`} onClick={() => setMode("sender")}>
+              Sender
+            </button>
+            <button className={`bulk-button quiet ${mode === "receiver" ? "active" : ""}`} onClick={() => setMode("receiver")}>
+              Receiver
+            </button>
+          </div>
         </header>
 
-        <motion.section className="drop-zone" whileTap={{ scale: 0.985 }}>
+        <section className="drop-zone">
+          <label className="eyebrow">Signaling server</label>
           <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*,video/*"
-            multiple
-            onChange={(event) => addFiles(event.target.files)}
+            className="server-input"
+            value={serverUrl}
+            onChange={(event) => setServerUrl(event.target.value)}
+            placeholder="ws://192.168.1.10:3001"
           />
-          <button className="add-button" onClick={() => fileInputRef.current?.click()}>
-            <span>
-              <Plus size={30} />
-            </span>
-            Select photos or videos
-          </button>
-          <p>Original bytes only. No compression, no edits, no metadata stripping.</p>
+          <p>Both devices must be on the same WiFi/hotspot and use the same server URL.</p>
           <div className="trust-row">
             <span>
-              <ShieldCheck size={15} /> EXIF preserved
+              <Check size={15} /> Direct P2P WebRTC transfer
             </span>
             <span>
-              <Video size={15} /> Full bitrate
+              <Download size={15} /> Files save to receiver device
             </span>
           </div>
-        </motion.section>
+        </section>
 
-        <AnimatePresence>
-          {queue.length > 0 && (
-            <motion.section
-              className="upload-sheet glass"
-              initial={{ y: 30, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 30, opacity: 0 }}
-            >
-              <div className="sheet-head">
-                <div>
-                  <strong>{queue.length} ready to send</strong>
-                  <span>Total progress {totalProgress}%</span>
+        {mode === "sender" ? (
+          <section className="upload-sheet glass">
+            <div className="sheet-head">
+              <div>
+                <strong>Sender</strong>
+                <span>Status: {status}</span>
+              </div>
+              <button className="icon-button quiet" onClick={connectAsSender} title="New code">
+                <RefreshCcw size={18} />
+              </button>
+            </div>
+
+            {transferCode && (
+              <div className="transfer-code-box">
+                <strong>{transferCode}</strong>
+                <div className="qr-wrap">
+                  <QRCodeSVG value={qrPayload} size={140} bgColor="transparent" fgColor="#F7F7FB" />
                 </div>
-                <button className="icon-button quiet" onClick={() => setQueue([])}>
-                  <X size={18} />
-                </button>
-              </div>
-              <div className="total-bar">
-                <span style={{ width: `${totalProgress}%` }} />
-              </div>
-              <div className="preview-strip">
-                {queue.map((entry) => (
-                  <QueuedFile key={entry.id} entry={entry} />
-                ))}
-              </div>
-              <button className="primary-button" onClick={uploadQueue} disabled={isUploading}>
-                {isUploading ? <Loader2 className="spin" size={19} /> : <UploadCloud size={20} />}
-                {isUploading ? "Sending originals" : "Upload originals"}
-              </button>
-            </motion.section>
-          )}
-        </AnimatePresence>
-
-        <section className="inbox">
-          <div className="section-title">
-            <div>
-              <span className="eyebrow">Inbox</span>
-              <div className="inbox-title-row">
-                <h2>Recent uploads</h2>
-                <span className="count-pill" aria-label={`${inboxCount} files in inbox`}>
-                  {inboxCount}
-                </span>
-              </div>
-            </div>
-            <div className="section-actions">
-              <button className="bulk-button quiet" onClick={toggleSelectAll} disabled={!items.length}>
-                {allItemsSelected ? "Clear all" : "Select all"}
-              </button>
-              <button className="icon-button quiet" onClick={loadItems} title="Refresh">
-                {isLoading ? <Loader2 className="spin" size={18} /> : <RefreshCcw size={18} />}
-              </button>
-            </div>
-          </div>
-
-          {(!hasSupabaseConfig || setupWarning) && <Notice message={setupWarning} />}
-
-          <div className="file-list">
-            <AnimatePresence initial={false}>
-              {items.map((item) => (
-                <FileCard
-                  key={item.id}
-                  item={item}
-                  selected={selected.has(item.id)}
-                  onToggle={() => toggleSelected(item.id)}
-                  onDownload={() => downloadSelected([item])}
-                />
-              ))}
-            </AnimatePresence>
-            {hasSupabaseConfig && !setupWarning && !items.length && (
-              <div className="empty-state">
-                <Image size={38} />
-                <strong>No live transfers</strong>
-                <span>Files appear here instantly after upload and expire in 30 minutes.</span>
+                <span>Scan the QR or enter code on receiver.</span>
               </div>
             )}
-          </div>
-        </section>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,video/*"
+              multiple
+              style={{ display: "none" }}
+              onChange={(event) => addFiles(event.target.files)}
+            />
+            <button className="add-button" onClick={() => fileInputRef.current?.click()}>
+              <span>
+                <Plus size={30} />
+              </span>
+              Select photos or videos
+            </button>
+
+            {queue.length > 0 && (
+              <>
+                <div className="preview-strip">
+                  {queue.map((entry) => (
+                    <QueuedFile key={entry.id} entry={entry} />
+                  ))}
+                </div>
+                <div className="sheet-head">
+                  <span>{queue.length} files · {formatBytes(totalBytes)}</span>
+                  <button className="icon-button quiet" onClick={() => setQueue([])}>
+                    <X size={18} />
+                  </button>
+                </div>
+              </>
+            )}
+
+            <div className="total-bar">
+              <span style={{ width: `${progress}%` }} />
+            </div>
+            <button className="primary-button" onClick={sendQueuedFiles} disabled={isSending || status !== "ready"}>
+              {isSending ? <Loader2 className="spin" size={19} /> : <Send size={20} />}
+              {isSending ? `Sending ${progress}%` : "Send files"}
+            </button>
+          </section>
+        ) : (
+          <section className="upload-sheet glass">
+            <div className="sheet-head">
+              <div>
+                <strong>Receiver</strong>
+                <span>Status: {status}</span>
+              </div>
+              <QrCode size={18} />
+            </div>
+
+            <input
+              className="server-input"
+              value={connectCode}
+              onChange={(event) => setConnectCode(event.target.value)}
+              placeholder="Paste transfer code or QR payload"
+            />
+            <button className="primary-button" onClick={connectAsReceiver}>
+              Connect to sender
+            </button>
+
+            <div className="total-bar">
+              <span style={{ width: `${progress}%` }} />
+            </div>
+
+            <section className="inbox">
+              <div className="section-title">
+                <div>
+                  <span className="eyebrow">Received now</span>
+                  <h2>{transferName()}</h2>
+                </div>
+              </div>
+
+              <div className="file-list">
+                {received.map((item) => (
+                  <ReceivedFileCard key={item.id} item={item} />
+                ))}
+                {!received.length && (
+                  <div className="empty-state">
+                    <Image size={38} />
+                    <strong>No files received yet</strong>
+                    <span>Files are downloaded immediately when transfer completes.</span>
+                  </div>
+                )}
+              </div>
+            </section>
+          </section>
+        )}
       </section>
 
-      <AnimatePresence>
-        {selectedItems.length > 0 && (
-          <motion.div
-            className="action-dock glass"
-            initial={{ y: 100, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 100, opacity: 0 }}
-          >
-            <button className="icon-button quiet" onClick={() => setSelected(new Set())}>
-              <X size={18} />
-            </button>
-            <div>
-              <strong>{selectedItems.length} selected</strong>
-              <span>{selectedItems.length > 1 ? "ZIP folder will be created" : "Direct original download"}</span>
-            </div>
-            <button className="dock-action" onClick={() => downloadSelected()} disabled={downloading}>
-              {downloading ? (
-                <Loader2 className="spin" size={18} />
-              ) : selectedItems.length > 1 ? (
-                <FileArchive size={18} />
-              ) : (
-                <Download size={18} />
-              )}
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {toast && (
-          <motion.button
-            className="toast"
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            onClick={() => setToast("")}
-          >
-            {toast}
-          </motion.button>
-        )}
-      </AnimatePresence>
+      {toast && (
+        <motion.button
+          className="toast"
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -20 }}
+          onClick={() => setToast("")}
+        >
+          {toast}
+        </motion.button>
+      )}
     </main>
   );
 }
 
 function QueuedFile({ entry }) {
-  const isVideo = entry.type.startsWith("video/");
+  const isVideo = entry.file.type.startsWith("video/");
   return (
     <article className="queue-card">
       {isVideo ? <video src={entry.previewUrl} muted playsInline /> : <img src={entry.previewUrl} alt="" />}
       <div className="queue-meta">
         <span>
-          {isVideo ? <Play size={13} /> : <Image size={13} />} {entry.name}
+          {isVideo ? <Video size={13} /> : <Image size={13} />} {entry.file.name}
         </span>
-        <small>{formatBytes(entry.size)}</small>
-      </div>
-      <div className="mini-bar">
-        <span style={{ width: `${entry.progress}%` }} />
+        <small>{formatBytes(entry.file.size)}</small>
       </div>
     </article>
   );
 }
 
-function FileCard({ item, selected, onToggle, onDownload }) {
-  const isVideo = item.mime_type?.startsWith("video/");
-  const signedUrl = item.preview_url;
-
+function ReceivedFileCard({ item }) {
+  const isVideo = item.type?.startsWith("video/");
   return (
-    <motion.article
-      className={`file-card glass ${selected ? "selected" : ""}`}
-      layout
-      initial={{ opacity: 0, y: 18 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, x: -20 }}
-      whileTap={{ scale: 0.985 }}
-    >
-      <button className="select-hit" onClick={onToggle} aria-label="Select file">
-        <span>{selected && <Check size={14} />}</span>
+    <article className="file-card glass">
+      <div className="select-hit">
+        <span>
+          {isVideo ? <Video size={14} /> : <Image size={14} />}
+        </span>
+      </div>
+      <button className="thumb" onClick={() => triggerDownload(item.blob, item.name)}>
+        {isVideo ? <Video size={24} /> : <Image size={24} />}
       </button>
-      <button className="thumb" onClick={onDownload} aria-label="Download file">
-        {signedUrl && !isVideo && <img loading="lazy" src={signedUrl} alt="" />}
-        {signedUrl && isVideo && <video preload="metadata" src={signedUrl} muted playsInline />}
-        {!signedUrl && (isVideo ? <Video size={24} /> : <Image size={24} />)}
-        {isVideo && (
-          <i>
-            <Play size={15} />
-          </i>
-        )}
+      <button className="file-copy" onClick={() => triggerDownload(item.blob, item.name)}>
+        <strong>{item.name}</strong>
+        <span>{formatBytes(item.size)}</span>
       </button>
-      <button className="file-copy" onClick={onDownload}>
-        <strong>{item.file_name}</strong>
-        <span>{formatBytes(item.file_size)} / {timeRemaining(item.expires_at)} left</span>
-      </button>
-      <button className="icon-button download" onClick={onDownload} title="Download">
+      <button className="icon-button download" onClick={() => triggerDownload(item.blob, item.name)}>
         <Download size={18} />
       </button>
-    </motion.article>
-  );
-}
-
-function Notice({ message }) {
-  return (
-    <div className="notice glass">
-      <Trash2 size={18} />
-      {message || "Add public Supabase env vars, create the bucket/table, then refresh."}
-    </div>
+    </article>
   );
 }
