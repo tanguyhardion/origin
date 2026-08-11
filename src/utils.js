@@ -17,12 +17,6 @@ export function transferName(date = new Date()) {
   return `Origin_Transfer_${date.toISOString().slice(0, 10)}`;
 }
 
-export function uniquePath(sessionId, file) {
-  const clean = file.name.replace(/[^\w.\-() ]+/g, "_");
-  const id = crypto.randomUUID();
-  return `${sessionId}/${id}-${clean}`;
-}
-
 export function triggerDownload(blob, filename) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -32,21 +26,4 @@ export function triggerDownload(blob, filename) {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-export function isActiveTransfer(expiresAt, now = new Date()) {
-  return new Date(expiresAt).getTime() > now.getTime();
-}
-
-export async function filterDisplayableItems(rows, resolveItem) {
-  const now = new Date();
-  const visible = await Promise.all(
-    (rows || []).map(async (item) => {
-      if (!isActiveTransfer(item.expires_at, now) || item.mime_type === "chunk/part") return null;
-      const resolved = await resolveItem(item);
-      return resolved?.exists ? resolved.item : null;
-    })
-  );
-
-  return visible.filter(Boolean);
 }
