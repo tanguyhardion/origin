@@ -319,13 +319,27 @@ export default function App() {
               className={`mode-btn ${mode === "sender" ? "active" : ""}`}
               onClick={() => changeMode("sender")}
             >
-              Sender
+              {mode === "sender" && (
+                <motion.div
+                  layoutId="active-mode-pill"
+                  className="mode-pill-bg"
+                  transition={{ type: "spring", stiffness: 450, damping: 35 }}
+                />
+              )}
+              <span className="mode-btn-text">Sender</span>
             </button>
             <button
               className={`mode-btn ${mode === "receiver" ? "active" : ""}`}
               onClick={() => changeMode("receiver")}
             >
-              Receiver
+              {mode === "receiver" && (
+                <motion.div
+                  layoutId="active-mode-pill"
+                  className="mode-pill-bg"
+                  transition={{ type: "spring", stiffness: 450, damping: 35 }}
+                />
+              )}
+              <span className="mode-btn-text">Receiver</span>
             </button>
           </div>
         </header>
@@ -349,7 +363,7 @@ export default function App() {
                   <strong>{transferCode}</strong>
                 </div>
                 <div className="qr-wrap">
-                  <QRCodeSVG value={qrPayload} size={148} bgColor="transparent" fgColor="#F7F7FB" />
+                  <QRCodeSVG value={qrPayload} size={160} bgColor="#FFFFFF" fgColor="#000000" level="M" />
                 </div>
                 <span className="qr-hint">Scan with receiver camera or enter code manually.</span>
               </div>

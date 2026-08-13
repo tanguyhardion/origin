@@ -101,7 +101,7 @@ export default function QrScannerModal({ isOpen, onClose, onScan }) {
           ctx.drawImage(video, 0, 0, width, height);
           const imageData = ctx.getImageData(0, 0, width, height);
           const code = jsQR(imageData.data, imageData.width, imageData.height, {
-            inversionAttempts: "dontInvert",
+            inversionAttempts: "attemptBoth",
           });
 
           if (code && code.data) {
