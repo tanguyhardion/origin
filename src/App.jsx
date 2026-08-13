@@ -116,6 +116,15 @@ export default function App() {
     };
   }, []);
 
+  // Auto-dismiss toast notification after a short delay
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => {
+      setToast("");
+    }, 3500);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
   useEffect(() => {
     if (mode === "sender") {
       connectAsSender();
