@@ -73,17 +73,29 @@ export class P2PTransfer {
   }
 
   setupPeer() {
+    // Direct LAN only: Empty iceServers array ensures no public STUN/TURN servers are queried
     this.pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-        { urls: "stun:stun2.l.google.com:19302" }
-      ],
+      iceServers: [],
     });
 
     this.pc.onicecandidate = (event) => {
       if (event.candidate) {
-        this.sendSignal({ candidate: event.candidate });
+        // Enforce Direct LAN (host candidate) only
+        const candStr = typeof event.candidate.candidate === "string" ? event.candidate.candidate : "";
+        const isHost = event.candidate.type === "host" || candStr.includes("typ host");
+
+        if (isHost) {
+          this.sendSignal({ candidate: event.candidate });
+        }
+      }
+    };
+
+    this.pc.oniceconnectionstatechange = () => {
+      const state = this.pc.iceConnectionState;
+      if (state === "failed") {
+        this.onError?.(
+          "Direct LAN connection failed. Ensure both devices are on the same Wi-Fi network and router AP/Client isolation is disabled."
+        );
       }
     };
 
@@ -208,10 +220,17 @@ export class P2PTransfer {
     }
 
     if (data.candidate) {
-      try {
-        await this.pc.addIceCandidate(data.candidate);
-      } catch {
-        this.onError?.("Could not add ICE candidate");
+      const candStr = typeof data.candidate === "string"
+        ? data.candidate
+        : data.candidate.candidate || "";
+      const isHost = data.candidate.type === "host" || candStr.includes("typ host");
+
+      if (isHost) {
+        try {
+          await this.pc.addIceCandidate(data.candidate);
+        } catch {
+          this.onError?.("Could not add direct LAN candidate");
+        }
       }
     }
   }
@@ -226,22 +245,37 @@ export class P2PTransfer {
       return;
     }
     return new Promise((resolve) => {
-      const checkBuffer = () => {
-        if (!this.channel || this.channel.bufferedAmount <= MAX_BUFFERED_AMOUNT) {
-          this.channel?.removeEventListener("bufferedamountlow", checkBuffer);
+      let resolved = false;
+      const done = () => {
+        if (!resolved) {
+          resolved = true;
+          this.channel?.removeEventListener("bufferedamountlow", done);
           resolve();
         }
       };
-      this.channel?.addEventListener("bufferedamountlow", checkBuffer);
-      setTimeout(checkBuffer, 50);
+
+      this.channel?.addEventListener("bufferedamountlow", done);
+
+      const checkInterval = setInterval(() => {
+        const lowThreshold = this.channel?.bufferedAmountLowThreshold || 1024 * 1024;
+        if (!this.channel || this.channel.bufferedAmount <= lowThreshold) {
+          clearInterval(checkInterval);
+          done();
+        }
+      }, 15);
     });
   }
 
   async drainBuffer() {
-    if (!this.channel) return;
-    while (this.channel.bufferedAmount > 0) {
-      await new Promise((r) => setTimeout(r, 20));
-    }
+    if (!this.channel || this.channel.bufferedAmount === 0) return;
+    return new Promise((resolve) => {
+      const checkInterval = setInterval(() => {
+        if (!this.channel || this.channel.bufferedAmount === 0) {
+          clearInterval(checkInterval);
+          resolve();
+        }
+      }, 15);
+    });
   }
 
   async sendFiles(files) {

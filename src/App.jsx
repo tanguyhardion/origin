@@ -190,7 +190,7 @@ export default function App() {
           )}
           <div className="trust-row">
             <span>
-              <Check size={15} /> Direct P2P WebRTC transfer
+              <Check size={15} /> Direct LAN P2P transfer (Local Wi-Fi Only)
             </span>
             <span>
               <Download size={15} /> Files save to receiver device
