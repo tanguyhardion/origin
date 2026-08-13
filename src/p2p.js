@@ -1,9 +1,9 @@
 import { normalizeServerUrl } from "./utils";
 
-// 16 KB chunks for maximum cross-browser WebRTC DataChannel compatibility and throughput
-const CHUNK_SIZE = 16 * 1024;
-const MAX_BUFFERED_AMOUNT = 512 * 1024; // 512 KB backpressure threshold
-const LOW_BUFFER_THRESHOLD = 256 * 1024; // 256 KB low buffer threshold
+// 64 KB chunks for max local LAN DataChannel throughput within standard SCTP packet limits
+const CHUNK_SIZE = 64 * 1024;
+const MAX_BUFFERED_AMOUNT = 4 * 1024 * 1024; // 4 MB backpressure threshold
+const LOW_BUFFER_THRESHOLD = 1024 * 1024; // 1 MB low buffer threshold
 
 export class P2PTransfer {
   constructor({ code, role, serverUrl, onStatus, onError, onFile, onProgress }) {
@@ -18,6 +18,7 @@ export class P2PTransfer {
     this.pc = null;
     this.channel = null;
     this.currentInbound = null;
+    this.pendingCandidates = [];
   }
 
   connect() {
@@ -37,7 +38,7 @@ export class P2PTransfer {
     }
 
     this.ws.onopen = () => {
-      this.onStatus?.("connected-to-signaling");
+      this.onStatus?.(this.role === "sender" ? "waiting-for-receiver" : "connected-to-signaling");
       this.ws.send(
         JSON.stringify({ type: "join", code: this.code, role: this.role })
       );
@@ -45,10 +46,18 @@ export class P2PTransfer {
     };
 
     this.ws.onmessage = async (event) => {
-      const message = JSON.parse(event.data);
+      let message;
+      try {
+        message = JSON.parse(event.data);
+      } catch {
+        return;
+      }
 
-      if (message.type === "peer-ready" && this.role === "sender") {
-        await this.createOffer();
+      if (message.type === "peer-ready") {
+        this.onStatus?.("connecting");
+        if (this.role === "sender") {
+          await this.createOffer();
+        }
       }
 
       if (message.type === "signal") {
@@ -63,7 +72,7 @@ export class P2PTransfer {
     this.ws.onerror = () => {
       const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
       const msg = isHttps
-        ? `Could not connect to signaling server at "${targetUrl}". GitHub Pages (HTTPS) requires a WSS signaling server. Deploy server/index.js to Render/Fly.io or access via HTTP for local testing.`
+        ? `Could not connect to signaling server at "${targetUrl}". HTTPS requires a WSS signaling server.`
         : `Could not reach signaling server at "${targetUrl}". Ensure the signaling server is running (npm run server).`;
       this.onError?.(msg);
     };
@@ -74,34 +83,53 @@ export class P2PTransfer {
   }
 
   setupPeer() {
-    // Direct LAN only: Empty iceServers array ensures no public STUN/TURN servers are queried
+    this.pendingCandidates = [];
+
+    // Direct LAN only: Empty iceServers array ensures no STUN/TURN servers are used
     this.pc = new RTCPeerConnection({
       iceServers: [],
     });
 
     this.pc.onicecandidate = (event) => {
       if (event.candidate) {
-        // Enforce Direct LAN (host candidate) only
-        const candStr = typeof event.candidate.candidate === "string" ? event.candidate.candidate : "";
-        const isHost = event.candidate.type === "host" || candStr.includes("typ host");
-
-        if (isHost) {
-          this.sendSignal({ candidate: event.candidate });
-        }
+        const candidatePayload = event.candidate.toJSON
+          ? event.candidate.toJSON()
+          : event.candidate;
+        this.sendSignal({ candidate: candidatePayload });
       }
     };
 
     this.pc.oniceconnectionstatechange = () => {
-      const state = this.pc.iceConnectionState;
-      if (state === "failed") {
+      const state = this.pc?.iceConnectionState;
+      if (state === "connected" || state === "completed") {
+        if (this.channel && this.channel.readyState === "open") {
+          this.onStatus?.("ready");
+        } else {
+          this.onStatus?.("connected");
+        }
+      } else if (state === "failed") {
         this.onError?.(
-          "Direct LAN connection failed. Ensure both devices are on the same Wi-Fi network and router AP/Client isolation is disabled."
+          "Direct LAN connection failed. Ensure both devices are on the same Wi-Fi/network and AP isolation is disabled on your router."
         );
+        this.onStatus?.("failed");
+      } else if (state === "disconnected") {
+        this.onStatus?.("disconnected");
       }
     };
 
     this.pc.onconnectionstatechange = () => {
-      this.onStatus?.(this.pc.connectionState);
+      const state = this.pc?.connectionState;
+      if (state === "connected") {
+        if (this.channel && this.channel.readyState === "open") {
+          this.onStatus?.("ready");
+        } else {
+          this.onStatus?.("connected");
+        }
+      } else if (state === "failed") {
+        this.onStatus?.("failed");
+      } else if (state === "disconnected") {
+        this.onStatus?.("disconnected");
+      }
     };
 
     if (this.role === "sender") {
@@ -214,34 +242,51 @@ export class P2PTransfer {
   }
 
   async createOffer() {
-    const offer = await this.pc.createOffer();
-    await this.pc.setLocalDescription(offer);
-    this.sendSignal({ sdp: this.pc.localDescription });
+    try {
+      const offer = await this.pc.createOffer();
+      await this.pc.setLocalDescription(offer);
+      this.sendSignal({ sdp: this.pc.localDescription });
+    } catch (err) {
+      this.onError?.(err.message || "Failed to create offer");
+    }
   }
 
   async handleSignal(data) {
-    if (data.sdp) {
-      const remoteDescription = new RTCSessionDescription(data.sdp);
-      await this.pc.setRemoteDescription(remoteDescription);
+    if (!data) return;
 
-      if (remoteDescription.type === "offer") {
-        const answer = await this.pc.createAnswer();
-        await this.pc.setLocalDescription(answer);
-        this.sendSignal({ sdp: this.pc.localDescription });
+    if (data.sdp) {
+      try {
+        const remoteDescription = new RTCSessionDescription(data.sdp);
+        await this.pc.setRemoteDescription(remoteDescription);
+
+        // Process any queued candidates that arrived before setRemoteDescription
+        while (this.pendingCandidates.length > 0) {
+          const cand = this.pendingCandidates.shift();
+          try {
+            await this.pc.addIceCandidate(new RTCIceCandidate(cand));
+          } catch (e) {
+            console.warn("Could not add queued ICE candidate:", e);
+          }
+        }
+
+        if (remoteDescription.type === "offer") {
+          const answer = await this.pc.createAnswer();
+          await this.pc.setLocalDescription(answer);
+          this.sendSignal({ sdp: this.pc.localDescription });
+        }
+      } catch (err) {
+        this.onError?.(err.message || "SDP signaling error");
       }
     }
 
     if (data.candidate) {
-      const candStr = typeof data.candidate === "string"
-        ? data.candidate
-        : data.candidate.candidate || "";
-      const isHost = data.candidate.type === "host" || candStr.includes("typ host");
-
-      if (isHost) {
+      if (!this.pc || !this.pc.remoteDescription || !this.pc.remoteDescription.type) {
+        this.pendingCandidates.push(data.candidate);
+      } else {
         try {
-          await this.pc.addIceCandidate(data.candidate);
-        } catch {
-          this.onError?.("Could not add direct LAN candidate");
+          await this.pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+        } catch (e) {
+          console.warn("Could not add ICE candidate:", e);
         }
       }
     }
@@ -273,7 +318,7 @@ export class P2PTransfer {
           clearInterval(checkInterval);
           done();
         }
-      }, 10);
+      }, 5);
     });
   }
 
@@ -285,13 +330,13 @@ export class P2PTransfer {
           clearInterval(checkInterval);
           resolve();
         }
-      }, 10);
+      }, 5);
     });
   }
 
   async sendFiles(files) {
     if (!this.channel || this.channel.readyState !== "open") {
-      throw new Error("Peer connection is not ready");
+      throw new Error("Direct LAN peer connection is not ready");
     }
 
     const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
@@ -330,6 +375,7 @@ export class P2PTransfer {
     this.channel?.close();
     this.pc?.close();
     this.ws?.close();
+    this.pendingCandidates = [];
   }
 }
 

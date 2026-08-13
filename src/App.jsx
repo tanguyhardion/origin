@@ -18,6 +18,31 @@ import { P2PTransfer } from "./p2p";
 import { encodeTransferPayload, generateTransferCode, parseTransferPayload } from "./transferCode";
 import { formatBytes, transferName, triggerDownload, defaultServerUrl, normalizeServerUrl } from "./utils";
 
+function formatStatusDescription(status) {
+  switch (status) {
+    case "idle":
+      return "Idle";
+    case "waiting-for-receiver":
+      return "Waiting for receiver...";
+    case "connected-to-signaling":
+      return "Signaling active · Waiting for receiver";
+    case "connecting":
+      return "Connecting P2P (Direct LAN)...";
+    case "connected":
+      return "LAN connected · Initializing channel...";
+    case "ready":
+      return "Ready (Direct LAN)";
+    case "channel-closed":
+      return "Channel closed";
+    case "disconnected":
+      return "Disconnected";
+    case "failed":
+      return "Connection failed";
+    default:
+      return status;
+  }
+}
+
 export default function App() {
   const [mode, setMode] = useState("sender");
   const [queue, setQueue] = useState([]);
@@ -38,6 +63,16 @@ export default function App() {
       queue.forEach((entry) => URL.revokeObjectURL(entry.previewUrl));
     };
   }, [queue]);
+
+  useEffect(() => {
+    if (mode === "sender") {
+      connectAsSender();
+    } else {
+      transferRef.current?.destroy();
+      transferRef.current = null;
+      setStatus("idle");
+    }
+  }, [mode]);
 
   const totalBytes = useMemo(
     () => queue.reduce((sum, entry) => sum + entry.file.size, 0),
@@ -203,7 +238,7 @@ export default function App() {
             <div className="sheet-head">
               <div>
                 <strong>Sender</strong>
-                <span>Status: {status}</span>
+                <span>Status: {formatStatusDescription(status)}</span>
               </div>
               <button className="icon-button quiet" onClick={connectAsSender} title="New code">
                 <RefreshCcw size={18} />
@@ -264,7 +299,7 @@ export default function App() {
             <div className="sheet-head">
               <div>
                 <strong>Receiver</strong>
-                <span>Status: {status}</span>
+                <span>Status: {formatStatusDescription(status)}</span>
               </div>
               <QrCode size={18} />
             </div>
