@@ -1,8 +1,9 @@
 import { normalizeServerUrl } from "./utils";
 
-// 256 KB chunks for high WebRTC throughput
-const CHUNK_SIZE = 256 * 1024;
-const MAX_BUFFERED_AMOUNT = 4 * 1024 * 1024; // 4 MB backpressure threshold
+// 16 KB chunks for maximum cross-browser WebRTC DataChannel compatibility and throughput
+const CHUNK_SIZE = 16 * 1024;
+const MAX_BUFFERED_AMOUNT = 512 * 1024; // 512 KB backpressure threshold
+const LOW_BUFFER_THRESHOLD = 256 * 1024; // 256 KB low buffer threshold
 
 export class P2PTransfer {
   constructor({ code, role, serverUrl, onStatus, onError, onFile, onProgress }) {
@@ -118,7 +119,7 @@ export class P2PTransfer {
     if (!this.channel) return;
 
     this.channel.binaryType = "arraybuffer";
-    this.channel.bufferedAmountLowThreshold = 1024 * 1024; // 1 MB
+    this.channel.bufferedAmountLowThreshold = LOW_BUFFER_THRESHOLD;
 
     this.channel.onopen = () => {
       this.onStatus?.("ready");
@@ -128,24 +129,30 @@ export class P2PTransfer {
       this.onStatus?.("channel-closed");
     };
 
-    const finalizeInboundIfComplete = () => {
+    const finalizeInbound = () => {
       if (!this.currentInbound) return;
-      const { name, size, type, received, chunks, hasEndSignal } = this.currentInbound;
+      const { name, size, type, chunks } = this.currentInbound;
 
-      const isComplete = received >= size || (hasEndSignal && received > 0 && received >= size * 0.999);
-      if (isComplete) {
-        const blob = new Blob(chunks, { type: type || "application/octet-stream" });
-        this.onFile?.({ name, size, type, blob });
-        this.onProgress?.({
-          direction: "receive",
-          fileName: name,
-          percent: 100,
-        });
-        this.currentInbound = null;
+      const blob = new Blob(chunks, { type: type || "application/octet-stream" });
+      this.onFile?.({ name, size, type, blob });
+      this.onProgress?.({
+        direction: "receive",
+        fileName: name,
+        percent: 100,
+      });
+      this.currentInbound = null;
+    };
+
+    const checkAndFinalize = () => {
+      if (!this.currentInbound) return;
+      const { size, received, hasEndSignal } = this.currentInbound;
+
+      if (received >= size || hasEndSignal) {
+        finalizeInbound();
       }
     };
 
-    this.channel.onmessage = async (event) => {
+    this.channel.onmessage = (event) => {
       if (typeof event.data === "string") {
         let message;
         try {
@@ -172,32 +179,37 @@ export class P2PTransfer {
 
         if (message.type === "file-end" && this.currentInbound) {
           this.currentInbound.hasEndSignal = true;
-          finalizeInboundIfComplete();
+          checkAndFinalize();
         }
 
         return;
       }
 
-      let chunk = event.data;
-      if (chunk instanceof Blob) {
-        chunk = await chunk.arrayBuffer();
-      }
-
       if (!this.currentInbound) return;
 
-      this.currentInbound.chunks.push(chunk);
-      this.currentInbound.received += chunk.byteLength;
+      const handleDataBuffer = (buffer) => {
+        if (!this.currentInbound) return;
+        this.currentInbound.chunks.push(buffer);
+        this.currentInbound.received += buffer.byteLength;
 
-      const percent = this.currentInbound.size
-        ? Math.min(100, Math.round((this.currentInbound.received / this.currentInbound.size) * 100))
-        : 0;
-      this.onProgress?.({
-        direction: "receive",
-        fileName: this.currentInbound.name,
-        percent,
-      });
+        const percent = this.currentInbound.size
+          ? Math.min(100, Math.round((this.currentInbound.received / this.currentInbound.size) * 100))
+          : 0;
 
-      finalizeInboundIfComplete();
+        this.onProgress?.({
+          direction: "receive",
+          fileName: this.currentInbound.name,
+          percent,
+        });
+
+        checkAndFinalize();
+      };
+
+      if (event.data instanceof ArrayBuffer) {
+        handleDataBuffer(event.data);
+      } else if (event.data instanceof Blob) {
+        event.data.arrayBuffer().then(handleDataBuffer);
+      }
     };
   }
 
@@ -241,7 +253,7 @@ export class P2PTransfer {
   }
 
   async waitForBuffer() {
-    if (!this.channel || this.channel.bufferedAmount <= MAX_BUFFERED_AMOUNT) {
+    if (!this.channel || this.channel.bufferedAmount < MAX_BUFFERED_AMOUNT) {
       return;
     }
     return new Promise((resolve) => {
@@ -257,12 +269,11 @@ export class P2PTransfer {
       this.channel?.addEventListener("bufferedamountlow", done);
 
       const checkInterval = setInterval(() => {
-        const lowThreshold = this.channel?.bufferedAmountLowThreshold || 1024 * 1024;
-        if (!this.channel || this.channel.bufferedAmount <= lowThreshold) {
+        if (!this.channel || this.channel.bufferedAmount <= LOW_BUFFER_THRESHOLD) {
           clearInterval(checkInterval);
           done();
         }
-      }, 15);
+      }, 10);
     });
   }
 
@@ -274,7 +285,7 @@ export class P2PTransfer {
           clearInterval(checkInterval);
           resolve();
         }
-      }, 15);
+      }, 10);
     });
   }
 
@@ -287,6 +298,7 @@ export class P2PTransfer {
     let sentBytes = 0;
 
     for (const file of files) {
+      await this.drainBuffer();
       this.channel.send(
         JSON.stringify({
           type: "file-meta",
@@ -320,4 +332,5 @@ export class P2PTransfer {
     this.ws?.close();
   }
 }
+
 
