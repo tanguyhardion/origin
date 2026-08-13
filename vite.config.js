@@ -8,8 +8,10 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     base: "./",
     define: {
+      "import.meta.env.VITE_SIGNALING_SERVER": JSON.stringify(env.VITE_SIGNALING_SERVER || ""),
       "import.meta.env.SUPABASE_URL": JSON.stringify(env.SUPABASE_URL || ""),
       "import.meta.env.SUPABASE_PUBLISHABLE": JSON.stringify(env.SUPABASE_PUBLISHABLE || ""),
     },
   };
 });
+

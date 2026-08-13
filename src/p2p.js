@@ -60,8 +60,8 @@ export class P2PTransfer {
     this.ws.onerror = () => {
       const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
       const msg = isHttps
-        ? "WebSocket connection failed over WSS. Ensure your signaling server supports SSL/WSS, or use HTTP for local ws:// testing."
-        : "Failed to reach signaling server. Make sure the signaling server is running.";
+        ? `Could not connect to signaling server at "${targetUrl}". GitHub Pages (HTTPS) requires a WSS signaling server. Deploy server/index.js to Render/Fly.io or access via HTTP for local testing.`
+        : `Could not reach signaling server at "${targetUrl}". Ensure the signaling server is running (npm run server).`;
       this.onError?.(msg);
     };
 

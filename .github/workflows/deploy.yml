@@ -36,6 +36,7 @@ jobs:
           cat > .env <<'EOF'
           SUPABASE_URL=${{ secrets.SUPABASE_URL }}
           SUPABASE_PUBLISHABLE=${{ secrets.SUPABASE_PUBLISHABLE }}
+          VITE_SIGNALING_SERVER=${{ secrets.VITE_SIGNALING_SERVER }}
           EOF
 
       - name: Build
@@ -43,6 +44,7 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE: ${{ secrets.SUPABASE_PUBLISHABLE }}
+          VITE_SIGNALING_SERVER: ${{ secrets.VITE_SIGNALING_SERVER }}
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
