@@ -14,13 +14,18 @@ export default function ReceivedFilesSection({
   return (
     <section className="inbox">
       <div className="inbox-header">
-        <div>
+        <div className="inbox-title-group">
           <span className="eyebrow">Received Files</span>
           <h2>{transferName()}</h2>
         </div>
         {received.length > 0 && (
           <div className="inbox-actions">
-            <button className="bulk-button text-btn" onClick={onToggleSelectAll}>
+            <button
+              type="button"
+              className="bulk-button text-btn"
+              onClick={onToggleSelectAll}
+              aria-label={selectedIds.size === received.length ? "Deselect all files" : "Select all files"}
+            >
               {selectedIds.size === received.length ? (
                 <>
                   <CheckSquare size={16} /> Deselect All
@@ -32,9 +37,11 @@ export default function ReceivedFilesSection({
               )}
             </button>
             <button
-              className="icon-button quiet"
+              type="button"
+              className="icon-button quiet delete-all-btn"
               onClick={onClearReceived}
               title="Clear received list"
+              aria-label="Clear received list"
             >
               <Trash2 size={16} />
             </button>

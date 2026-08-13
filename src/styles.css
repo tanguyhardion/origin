@@ -447,32 +447,56 @@ button { border: 0; color: inherit; cursor: pointer; }
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+.inbox-title-group {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .inbox-header h2 {
   font-size: 20px;
   font-weight: 800;
   margin: 3px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .inbox-actions {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .bulk-button {
+  height: 38px;
   min-height: 38px;
   padding: 0 14px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   color: #f7f7fb;
   font-weight: 750;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
   transition: all 0.2s ease;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .bulk-button:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.bulk-button:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .bulk-button:disabled {
@@ -483,18 +507,51 @@ button { border: 0; color: inherit; cursor: pointer; }
 .text-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 0 14px;
+  height: 38px;
+  min-height: 38px;
   border-radius: 999px;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 700;
   background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   color: #d2d5e2;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .text-btn:hover {
   background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.2);
   color: #fff;
+}
+
+.text-btn:active {
+  transform: scale(0.97);
+}
+
+.inbox-actions .icon-button {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  min-height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #a4a9bb;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.inbox-actions .icon-button:hover {
+  background: rgba(255, 107, 139, 0.16);
+  border-color: rgba(255, 107, 139, 0.35);
+  color: #ff6b8b;
+}
+
+.inbox-actions .icon-button:active {
+  transform: scale(0.95);
 }
 
 .download-controls {
@@ -555,6 +612,41 @@ button { border: 0; color: inherit; cursor: pointer; }
 }
 
 @media (max-width: 480px) {
+  .inbox-header {
+    gap: 8px;
+  }
+
+  .inbox-header h2 {
+    font-size: 17px;
+    max-width: 175px;
+  }
+
+  .inbox-actions {
+    gap: 6px;
+  }
+
+  .inbox-actions .bulk-button,
+  .inbox-actions .text-btn {
+    height: 36px;
+    min-height: 36px;
+    padding: 0 11px;
+    font-size: 12px;
+    gap: 5px;
+  }
+
+  .inbox-actions .bulk-button svg,
+  .inbox-actions .text-btn svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .inbox-actions .icon-button {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+  }
+
   .download-controls {
     padding: 14px;
     gap: 10px;
@@ -571,6 +663,23 @@ button { border: 0; color: inherit; cursor: pointer; }
 
   .bulk-zip-btn {
     width: 100%;
+  }
+}
+
+@media (max-width: 360px) {
+  .inbox-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .inbox-header h2 {
+    max-width: 100%;
+  }
+
+  .inbox-actions {
+    width: 100%;
+    justify-content: flex-end;
   }
 }
 
