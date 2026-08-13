@@ -38,7 +38,7 @@ export class P2PTransfer {
     }
 
     this.ws.onopen = () => {
-      this.onStatus?.(this.role === "sender" ? "waiting-for-receiver" : "connected-to-signaling");
+      this.onStatus?.(this.role === "sender" ? "waiting-for-receiver" : "connecting");
       this.ws.send(
         JSON.stringify({ type: "join", code: this.code, role: this.role })
       );

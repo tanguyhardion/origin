@@ -18,16 +18,20 @@ import { P2PTransfer } from "./p2p";
 import { encodeTransferPayload, generateTransferCode, parseTransferPayload } from "./transferCode";
 import { formatBytes, transferName, triggerDownload, defaultServerUrl, normalizeServerUrl } from "./utils";
 
-function formatStatusDescription(status) {
+function formatStatusDescription(status, mode) {
   switch (status) {
     case "idle":
       return "Idle";
     case "waiting-for-receiver":
       return "Waiting for receiver...";
     case "connected-to-signaling":
-      return "Signaling active · Waiting for receiver";
+      return mode === "receiver"
+        ? "Connected to signaling"
+        : "Signaling active · Waiting for receiver";
     case "connecting":
-      return "Connecting P2P (Direct LAN)...";
+      return mode === "receiver"
+        ? "Connecting to sender (Direct LAN)..."
+        : "Connecting P2P (Direct LAN)...";
     case "connected":
       return "LAN connected · Initializing channel...";
     case "ready":
@@ -57,12 +61,12 @@ export default function App() {
   const fileInputRef = useRef(null);
   const transferRef = useRef(null);
 
+  // Clean up P2P connection on unmount
   useEffect(() => {
     return () => {
       transferRef.current?.destroy();
-      queue.forEach((entry) => URL.revokeObjectURL(entry.previewUrl));
     };
-  }, [queue]);
+  }, []);
 
   useEffect(() => {
     if (mode === "sender") {
@@ -78,6 +82,11 @@ export default function App() {
     () => queue.reduce((sum, entry) => sum + entry.file.size, 0),
     [queue]
   );
+
+  function clearQueue() {
+    queue.forEach((entry) => URL.revokeObjectURL(entry.previewUrl));
+    setQueue([]);
+  }
 
   function addFiles(files) {
     const next = Array.from(files || []).filter(
@@ -238,7 +247,7 @@ export default function App() {
             <div className="sheet-head">
               <div>
                 <strong>Sender</strong>
-                <span>Status: {formatStatusDescription(status)}</span>
+                <span>Status: {formatStatusDescription(status, "sender")}</span>
               </div>
               <button className="icon-button quiet" onClick={connectAsSender} title="New code">
                 <RefreshCcw size={18} />
@@ -279,7 +288,7 @@ export default function App() {
                 </div>
                 <div className="sheet-head">
                   <span>{queue.length} files · {formatBytes(totalBytes)}</span>
-                  <button className="icon-button quiet" onClick={() => setQueue([])}>
+                  <button className="icon-button quiet" onClick={clearQueue}>
                     <X size={18} />
                   </button>
                 </div>
@@ -299,7 +308,7 @@ export default function App() {
             <div className="sheet-head">
               <div>
                 <strong>Receiver</strong>
-                <span>Status: {formatStatusDescription(status)}</span>
+                <span>Status: {formatStatusDescription(status, "receiver")}</span>
               </div>
               <QrCode size={18} />
             </div>
