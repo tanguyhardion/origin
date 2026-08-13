@@ -16,12 +16,7 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import { P2PTransfer } from "./p2p";
 import { encodeTransferPayload, generateTransferCode, parseTransferPayload } from "./transferCode";
-import { formatBytes, transferName, triggerDownload } from "./utils";
-
-function defaultServerUrl() {
-  const host = window.location.hostname || "localhost";
-  return `ws://${host}:3001`;
-}
+import { formatBytes, transferName, triggerDownload, defaultServerUrl, normalizeServerUrl } from "./utils";
 
 export default function App() {
   const [mode, setMode] = useState("sender");
@@ -76,10 +71,12 @@ export default function App() {
     setStatus("waiting-for-receiver");
     setProgress(0);
 
+    const activeServerUrl = normalizeServerUrl(serverUrl);
+
     const transfer = new P2PTransfer({
       code,
       role: "sender",
-      serverUrl,
+      serverUrl: activeServerUrl,
       onStatus: setStatus,
       onError: (message) => setToast(message),
       onProgress: ({ percent }) => setProgress(percent),
@@ -100,10 +97,12 @@ export default function App() {
     setStatus("connecting");
     setProgress(0);
 
+    const activeServerUrl = normalizeServerUrl(parsed.serverUrl || serverUrl);
+
     const transfer = new P2PTransfer({
       code: parsed.code,
       role: "receiver",
-      serverUrl: parsed.serverUrl || serverUrl,
+      serverUrl: activeServerUrl,
       onStatus: setStatus,
       onError: (message) => setToast(message),
       onProgress: ({ percent }) => setProgress(percent),
@@ -151,8 +150,10 @@ export default function App() {
   }
 
   const qrPayload = transferCode
-    ? encodeTransferPayload({ code: transferCode, serverUrl })
+    ? encodeTransferPayload({ code: transferCode, serverUrl: normalizeServerUrl(serverUrl) })
     : "";
+
+  const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
 
   return (
     <main className="app-shell">
@@ -179,9 +180,14 @@ export default function App() {
             className="server-input"
             value={serverUrl}
             onChange={(event) => setServerUrl(event.target.value)}
-            placeholder="ws://192.168.1.10:3001"
+            placeholder={isHttps ? "wss://192.168.1.10:3001" : "ws://192.168.1.10:3001"}
           />
           <p>Both devices must be on the same WiFi/hotspot and use the same server URL.</p>
+          {isHttps && (
+            <small style={{ color: "#f87171", marginTop: "4px", display: "block" }}>
+              ⚠️ Page loaded via HTTPS: Browsers enforce secure WebSockets (wss://). Insecure ws:// connections are auto-converted to wss://.
+            </small>
+          )}
           <div className="trust-row">
             <span>
               <Check size={15} /> Direct P2P WebRTC transfer

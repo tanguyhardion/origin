@@ -1,3 +1,46 @@
+export function normalizeServerUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return "";
+  let url = rawUrl.trim();
+  if (!url) return "";
+
+  const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
+
+  if (url.startsWith("http://")) {
+    url = "ws://" + url.slice(7);
+  } else if (url.startsWith("https://")) {
+    url = "wss://" + url.slice(8);
+  } else if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
+    url = (isHttps ? "wss://" : "ws://") + url;
+  }
+
+  if (isHttps && url.startsWith("ws://")) {
+    url = "wss://" + url.slice(5);
+  }
+
+  return url;
+}
+
+export function defaultServerUrl() {
+  if (typeof import.meta !== "undefined" && import.meta.env?.VITE_SIGNALING_SERVER) {
+    return normalizeServerUrl(import.meta.env.VITE_SIGNALING_SERVER);
+  }
+
+  const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
+  const scheme = isHttps ? "wss" : "ws";
+  const hostname = typeof window !== "undefined" ? window.location.hostname : "localhost";
+
+  const isLocalHost =
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]" ||
+    /^192\.168\./.test(hostname) ||
+    /^10\./.test(hostname) ||
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(hostname);
+
+  const host = isLocalHost ? hostname : "localhost";
+  return `${scheme}://${host}:3001`;
+}
+
 export function formatBytes(bytes = 0) {
   if (!bytes) return "0 B";
   const units = ["B", "KB", "MB", "GB"];
@@ -27,3 +70,4 @@ export function triggerDownload(blob, filename) {
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+

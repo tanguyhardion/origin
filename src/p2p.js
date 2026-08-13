@@ -1,3 +1,5 @@
+import { normalizeServerUrl } from "./utils";
+
 const CHUNK_SIZE = 64 * 1024;
 
 export class P2PTransfer {
@@ -16,7 +18,20 @@ export class P2PTransfer {
   }
 
   connect() {
-    this.ws = new WebSocket(this.serverUrl);
+    const targetUrl = normalizeServerUrl(this.serverUrl);
+
+    try {
+      this.ws = new WebSocket(targetUrl);
+    } catch (err) {
+      const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
+      let msg = err.message || "Failed to create WebSocket connection.";
+      if (isHttps) {
+        msg = "HTTPS pages require secure WebSockets (wss://). Insecure connection blocked by browser.";
+      }
+      this.onError?.(msg);
+      this.onStatus?.("disconnected");
+      return;
+    }
 
     this.ws.onopen = () => {
       this.onStatus?.("connected-to-signaling");
@@ -43,7 +58,11 @@ export class P2PTransfer {
     };
 
     this.ws.onerror = () => {
-      this.onError?.("Failed to reach signaling server");
+      const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
+      const msg = isHttps
+        ? "WebSocket connection failed over WSS. Ensure your signaling server supports SSL/WSS, or use HTTP for local ws:// testing."
+        : "Failed to reach signaling server. Make sure the signaling server is running.";
+      this.onError?.(msg);
     };
 
     this.ws.onclose = () => {
