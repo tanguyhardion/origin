@@ -340,6 +340,15 @@ function QueuedFile({ entry }) {
 
 function ReceivedFileCard({ item }) {
   const isVideo = item.type?.startsWith("video/");
+  const [objectUrl, setObjectUrl] = useState("");
+
+  useEffect(() => {
+    if (!item.blob) return;
+    const url = URL.createObjectURL(item.blob);
+    setObjectUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [item.blob]);
+
   return (
     <article className="file-card glass">
       <div className="select-hit">
@@ -347,16 +356,27 @@ function ReceivedFileCard({ item }) {
           {isVideo ? <Video size={14} /> : <Image size={14} />}
         </span>
       </div>
-      <button className="thumb" onClick={() => triggerDownload(item.blob, item.name)}>
-        {isVideo ? <Video size={24} /> : <Image size={24} />}
+      <button className="thumb" onClick={() => triggerDownload(item.blob, item.name)} title="Download file">
+        {objectUrl ? (
+          isVideo ? (
+            <video src={objectUrl} muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "8px" }} />
+          ) : (
+            <img src={objectUrl} alt={item.name} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "8px" }} />
+          )
+        ) : isVideo ? (
+          <Video size={24} />
+        ) : (
+          <Image size={24} />
+        )}
       </button>
       <button className="file-copy" onClick={() => triggerDownload(item.blob, item.name)}>
         <strong>{item.name}</strong>
         <span>{formatBytes(item.size)}</span>
       </button>
-      <button className="icon-button download" onClick={() => triggerDownload(item.blob, item.name)}>
+      <button className="icon-button download" onClick={() => triggerDownload(item.blob, item.name)} title="Download file">
         <Download size={18} />
       </button>
     </article>
   );
 }
+
