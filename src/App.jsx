@@ -330,24 +330,6 @@ export default function App() {
           </div>
         </header>
 
-        <section className="config-card glass">
-          <div className="config-header">
-            <label className="eyebrow">Signaling Server</label>
-            <span className="direct-badge">
-              <Check size={13} /> LAN Direct P2P
-            </span>
-          </div>
-          <input
-            className="server-input"
-            value={serverUrl}
-            onChange={(event) => changeServerUrl(event.target.value)}
-            placeholder="ws://192.168.1.10:3001"
-          />
-          <p className="helper-text">
-            Both devices must be on the same local network (Wi-Fi or hotspot).
-          </p>
-        </section>
-
         {mode === "sender" ? (
           <section className="upload-sheet glass">
             <div className="sheet-head">
