@@ -1,3 +1,5 @@
+import JSZip from "jszip";
+
 export function normalizeServerUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== "string") return "";
   let url = rawUrl.trim();
@@ -70,4 +72,33 @@ export function triggerDownload(blob, filename) {
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+export async function downloadFilesAsZip(items, folderPrefix = "Origin_Files") {
+  if (!items || items.length === 0) return;
+  const zip = new JSZip();
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const folderName = `${folderPrefix}_${dateStr}`;
+  const folder = zip.folder(folderName);
+
+  const nameCounts = {};
+  for (const item of items) {
+    let name = item.name || "file";
+    if (nameCounts[name]) {
+      nameCounts[name]++;
+      const dotIndex = name.lastIndexOf(".");
+      if (dotIndex !== -1) {
+        name = `${name.slice(0, dotIndex)} (${nameCounts[name]})${name.slice(dotIndex)}`;
+      } else {
+        name = `${name} (${nameCounts[name]})`;
+      }
+    } else {
+      nameCounts[name] = 1;
+    }
+    folder.file(name, item.blob);
+  }
+
+  const zipBlob = await zip.generateAsync({ type: "blob" });
+  triggerDownload(zipBlob, `${folderName}.zip`);
+}
+
 
