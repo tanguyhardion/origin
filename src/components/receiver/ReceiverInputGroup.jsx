@@ -33,9 +33,9 @@ export default function ReceiverInputGroup({
         type="button"
         className="primary-button"
         onClick={() => onConnect()}
-        disabled={status === "connecting"}
+        disabled={["connecting", "retrying-internet", "connecting-internet"].includes(status)}
       >
-        {status === "connecting" ? (
+        {["connecting", "retrying-internet", "connecting-internet"].includes(status) ? (
           <>
             <Loader2 className="spin" size={19} /> Connecting...
           </>

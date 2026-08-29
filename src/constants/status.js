@@ -12,10 +12,18 @@ export function formatStatusDescription(status, mode) {
       return mode === "receiver"
         ? "Connecting to sender (Direct LAN)..."
         : "Connecting P2P (Direct LAN)...";
+    case "retrying-internet":
+      return "LAN unavailable, retrying over Internet...";
+    case "connecting-internet":
+      return "Connecting peer over Internet...";
     case "connected":
       return "LAN connected · Initializing channel...";
+    case "connected-internet":
+      return "Internet path connected · Initializing channel...";
     case "ready":
       return "Ready (Direct LAN)";
+    case "ready-internet":
+      return "Ready (Internet fallback)";
     case "channel-closed":
       return "Channel closed";
     case "disconnected":

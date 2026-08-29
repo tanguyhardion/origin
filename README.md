@@ -1,6 +1,8 @@
 # Origin
 
-Origin is a mobile-first direct transfer app for moving original photos and videos between two devices on the same local network (shared WiFi or hotspot).
+Origin is a mobile-first direct transfer app for moving original photos and videos between two devices.
+
+By default, Origin attempts a direct LAN path (shared WiFi/hotspot) for fastest transfer. If LAN peer connectivity fails, it automatically retries through an Internet-capable WebRTC path.
 
 Files do **not** pass through cloud storage. They are transferred over WebRTC data channels and downloaded directly on the receiver device.
 
@@ -38,6 +40,8 @@ npm run dev
 
 ## Notes
 
-- Both devices must use the same signaling server URL and be on the same local network.
+- Both devices must use the same signaling server URL.
+- LAN is attempted first; when direct LAN fails, Origin retries with public STUN-based Internet ICE candidates.
+- Some strict NAT/firewall networks still require a TURN relay server for reliable Internet fallback.
 - The signaling server relays only session metadata/ICE candidates, never file bytes.
 - Origin does not persist transfer history.

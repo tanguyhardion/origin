@@ -85,6 +85,14 @@ wss.on("connection", (ws) => {
       if (!room) return;
       const target = message.role === "sender" ? room.receiver : room.sender;
       send(target, { type: "signal", data: message.data });
+      return;
+    }
+
+    if (message.type === "fallback-internet") {
+      const room = rooms.get(message.code);
+      if (!room) return;
+      const target = message.role === "sender" ? room.receiver : room.sender;
+      send(target, { type: "fallback-internet" });
     }
   });
 

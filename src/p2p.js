@@ -1,9 +1,14 @@
 import { normalizeServerUrl } from "./utils";
 
-// 64 KB chunks for max local LAN DataChannel throughput within standard SCTP packet limits
+// 64 KB chunks for max DataChannel throughput within standard SCTP packet limits
 const CHUNK_SIZE = 64 * 1024;
 const MAX_BUFFERED_AMOUNT = 4 * 1024 * 1024; // 4 MB backpressure threshold
 const LOW_BUFFER_THRESHOLD = 1024 * 1024; // 1 MB low buffer threshold
+const LAN_FALLBACK_TIMEOUT_MS = 12000;
+
+const INTERNET_ICE_SERVERS = [
+  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+];
 
 export class P2PTransfer {
   constructor({ code, role, serverUrl, onStatus, onError, onFile, onProgress }) {
@@ -19,6 +24,10 @@ export class P2PTransfer {
     this.channel = null;
     this.currentInbound = null;
     this.pendingCandidates = [];
+    this.peerReady = false;
+    this.usingInternetFallback = false;
+    this.hasAttemptedInternetFallback = false;
+    this.lanFallbackTimer = null;
   }
 
   connect() {
@@ -39,10 +48,8 @@ export class P2PTransfer {
 
     this.ws.onopen = () => {
       this.onStatus?.(this.role === "sender" ? "waiting-for-receiver" : "connecting");
-      this.ws.send(
-        JSON.stringify({ type: "join", code: this.code, role: this.role })
-      );
-      this.setupPeer();
+      this.ws.send(JSON.stringify({ type: "join", code: this.code, role: this.role }));
+      this.setupPeer({ useInternetIce: false });
     };
 
     this.ws.onmessage = async (event) => {
@@ -54,10 +61,16 @@ export class P2PTransfer {
       }
 
       if (message.type === "peer-ready") {
-        this.onStatus?.("connecting");
+        this.peerReady = true;
+        this.onStatus?.(this.usingInternetFallback ? "connecting-internet" : "connecting");
         if (this.role === "sender") {
+          this.armLanFallbackTimer();
           await this.createOffer();
         }
+      }
+
+      if (message.type === "fallback-internet") {
+        await this.switchToInternetFallback("peer");
       }
 
       if (message.type === "signal") {
@@ -78,16 +91,18 @@ export class P2PTransfer {
     };
 
     this.ws.onclose = () => {
+      this.clearLanFallbackTimer();
       this.onStatus?.("disconnected");
     };
   }
 
-  setupPeer() {
+  setupPeer({ useInternetIce }) {
+    this.closePeer();
     this.pendingCandidates = [];
+    this.usingInternetFallback = useInternetIce;
 
-    // Direct LAN only: Empty iceServers array ensures no STUN/TURN servers are used
     this.pc = new RTCPeerConnection({
-      iceServers: [],
+      iceServers: useInternetIce ? INTERNET_ICE_SERVERS : [],
     });
 
     this.pc.onicecandidate = (event) => {
@@ -102,14 +117,19 @@ export class P2PTransfer {
     this.pc.oniceconnectionstatechange = () => {
       const state = this.pc?.iceConnectionState;
       if (state === "connected" || state === "completed") {
+        this.clearLanFallbackTimer();
         if (this.channel && this.channel.readyState === "open") {
-          this.onStatus?.("ready");
+          this.onStatus?.(this.usingInternetFallback ? "ready-internet" : "ready");
         } else {
-          this.onStatus?.("connected");
+          this.onStatus?.(this.usingInternetFallback ? "connected-internet" : "connected");
         }
       } else if (state === "failed") {
+        if (!this.usingInternetFallback) {
+          this.switchToInternetFallback("ice-failed");
+          return;
+        }
         this.onError?.(
-          "Direct LAN connection failed. Ensure both devices are on the same Wi-Fi/network and AP isolation is disabled on your router."
+          "Connection failed over Internet path. A TURN relay may be required for strict NAT/firewall networks."
         );
         this.onStatus?.("failed");
       } else if (state === "disconnected") {
@@ -120,12 +140,17 @@ export class P2PTransfer {
     this.pc.onconnectionstatechange = () => {
       const state = this.pc?.connectionState;
       if (state === "connected") {
+        this.clearLanFallbackTimer();
         if (this.channel && this.channel.readyState === "open") {
-          this.onStatus?.("ready");
+          this.onStatus?.(this.usingInternetFallback ? "ready-internet" : "ready");
         } else {
-          this.onStatus?.("connected");
+          this.onStatus?.(this.usingInternetFallback ? "connected-internet" : "connected");
         }
       } else if (state === "failed") {
+        if (!this.usingInternetFallback) {
+          this.switchToInternetFallback("pc-failed");
+          return;
+        }
         this.onStatus?.("failed");
       } else if (state === "disconnected") {
         this.onStatus?.("disconnected");
@@ -143,6 +168,65 @@ export class P2PTransfer {
     }
   }
 
+  armLanFallbackTimer() {
+    this.clearLanFallbackTimer();
+    if (this.usingInternetFallback) return;
+
+    this.lanFallbackTimer = setTimeout(() => {
+      this.switchToInternetFallback("timeout");
+    }, LAN_FALLBACK_TIMEOUT_MS);
+  }
+
+  clearLanFallbackTimer() {
+    if (this.lanFallbackTimer) {
+      clearTimeout(this.lanFallbackTimer);
+      this.lanFallbackTimer = null;
+    }
+  }
+
+  closePeer() {
+    try {
+      this.channel?.close();
+    } catch {
+      // no-op
+    }
+    try {
+      this.pc?.close();
+    } catch {
+      // no-op
+    }
+    this.channel = null;
+    this.pc = null;
+  }
+
+  async switchToInternetFallback(trigger) {
+    if (this.usingInternetFallback || this.hasAttemptedInternetFallback) return;
+
+    this.hasAttemptedInternetFallback = true;
+    this.clearLanFallbackTimer();
+
+    if (trigger !== "peer") {
+      this.sendFallbackSignal();
+    }
+
+    this.onError?.("Direct LAN path unavailable. Retrying over Internet route...");
+    this.onStatus?.("retrying-internet");
+
+    this.setupPeer({ useInternetIce: true });
+
+    if (this.role === "sender" && this.peerReady) {
+      this.onStatus?.("connecting-internet");
+      await this.createOffer();
+    }
+  }
+
+  sendFallbackSignal() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(
+      JSON.stringify({ type: "fallback-internet", code: this.code, role: this.role })
+    );
+  }
+
   bindChannel() {
     if (!this.channel) return;
 
@@ -150,7 +234,8 @@ export class P2PTransfer {
     this.channel.bufferedAmountLowThreshold = LOW_BUFFER_THRESHOLD;
 
     this.channel.onopen = () => {
-      this.onStatus?.("ready");
+      this.clearLanFallbackTimer();
+      this.onStatus?.(this.usingInternetFallback ? "ready-internet" : "ready");
     };
 
     this.channel.onclose = () => {
@@ -242,6 +327,8 @@ export class P2PTransfer {
   }
 
   async createOffer() {
+    if (!this.pc) return;
+
     try {
       const offer = await this.pc.createOffer();
       await this.pc.setLocalDescription(offer);
@@ -253,11 +340,18 @@ export class P2PTransfer {
 
   async handleSignal(data) {
     if (!data) return;
+    if (!this.pc) {
+      this.setupPeer({ useInternetIce: this.usingInternetFallback });
+    }
 
     if (data.sdp) {
       try {
         const remoteDescription = new RTCSessionDescription(data.sdp);
         await this.pc.setRemoteDescription(remoteDescription);
+
+        if (remoteDescription.type === "offer" && !this.usingInternetFallback) {
+          this.armLanFallbackTimer();
+        }
 
         // Process any queued candidates that arrived before setRemoteDescription
         while (this.pendingCandidates.length > 0) {
@@ -336,7 +430,7 @@ export class P2PTransfer {
 
   async sendFiles(files) {
     if (!this.channel || this.channel.readyState !== "open") {
-      throw new Error("Direct LAN peer connection is not ready");
+      throw new Error("Peer connection is not ready");
     }
 
     const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
@@ -372,8 +466,8 @@ export class P2PTransfer {
   }
 
   destroy() {
-    this.channel?.close();
-    this.pc?.close();
+    this.clearLanFallbackTimer();
+    this.closePeer();
     this.ws?.close();
     this.pendingCandidates = [];
   }

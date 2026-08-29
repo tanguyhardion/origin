@@ -66,7 +66,7 @@ export default function SenderView({
       <button
         className="primary-button"
         onClick={onSend}
-        disabled={isSending || status !== "ready" || queue.length === 0}
+        disabled={isSending || !["ready", "ready-internet"].includes(status) || queue.length === 0}
       >
         {isSending ? <Loader2 className="spin" size={19} /> : <Send size={19} />}
         {isSending ? `Sending ${progress}%` : "Send files"}
