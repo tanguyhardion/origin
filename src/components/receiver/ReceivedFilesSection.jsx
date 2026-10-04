@@ -85,7 +85,7 @@ export default function ReceivedFilesSection({
             <Image size={38} />
             <strong>No files received yet</strong>
             <span>
-              Connect to a sender to transfer photos & videos directly over LAN.
+              Connect to a sender to transfer files directly over LAN.
             </span>
           </div>
         )}

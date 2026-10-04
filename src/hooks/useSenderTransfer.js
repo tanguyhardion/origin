@@ -37,12 +37,10 @@ export function useSenderTransfer({ serverUrl, onToast }) {
 
   const addFiles = useCallback(
     (files) => {
-      const next = Array.from(files || []).filter(
-        (file) => file.type.startsWith("image/") || file.type.startsWith("video/")
-      );
+      const next = Array.from(files || []);
 
       if (!next.length) {
-        onToast?.("Select photos or videos to transfer.");
+        onToast?.("Select files to transfer.");
         return;
       }
 

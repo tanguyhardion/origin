@@ -349,6 +349,15 @@ button { border: 0; color: inherit; cursor: pointer; }
   display: block;
 }
 
+.queue-file-icon {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding-bottom: 40px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
 .queue-meta {
   position: absolute;
   inset: auto 6px 8px;

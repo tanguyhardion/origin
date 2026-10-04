@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
-import { Check, Download, Image, Video } from "lucide-react";
+import { Check, Download, File, Image, Video } from "lucide-react";
 import { formatBytes, triggerDownload } from "../../utils";
 
 export default function ReceivedFileCard({ item, isSelected, onToggleSelect }) {
   const isVideo = item.type?.startsWith("video/");
+  const isImage = item.type?.startsWith("image/");
   const [objectUrl, setObjectUrl] = useState("");
 
   useEffect(() => {
@@ -27,16 +28,16 @@ export default function ReceivedFileCard({ item, isSelected, onToggleSelect }) {
       </button>
 
       <div className="thumb">
-        {objectUrl ? (
-          isVideo ? (
-            <video src={objectUrl} muted playsInline />
-          ) : (
-            <img src={objectUrl} alt={item.name} />
-          )
+        {objectUrl && isVideo ? (
+          <video src={objectUrl} muted playsInline />
+        ) : objectUrl && isImage ? (
+          <img src={objectUrl} alt={item.name} />
         ) : isVideo ? (
           <Video size={22} />
-        ) : (
+        ) : isImage ? (
           <Image size={22} />
+        ) : (
+          <File size={22} />
         )}
       </div>
 

@@ -43,7 +43,6 @@ export default function SenderView({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*,video/*"
         multiple
         style={{ display: "none" }}
         onChange={(event) => onAddFiles(event.target.files)}
@@ -52,7 +51,7 @@ export default function SenderView({
         <span>
           <Plus size={26} />
         </span>
-        Select photos or videos
+        Select files
       </button>
 
       <QueueSection
