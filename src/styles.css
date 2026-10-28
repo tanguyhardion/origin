@@ -903,6 +903,7 @@ button { border: 0; color: inherit; cursor: pointer; }
   position: absolute;
   inset: 15%;
   pointer-events: none;
+  container-type: size;
 }
 
 .target-corner {
@@ -948,13 +949,14 @@ button { border: 0; color: inherit; cursor: pointer; }
   height: 2px;
   background: linear-gradient(90deg, transparent, #74f2d0, transparent);
   box-shadow: 0 0 12px #74f2d0;
-  animation: scanLaser 2s infinite ease-in-out;
+  top: 0;
+  will-change: transform;
+  animation: scanLaser 2.4s infinite ease-in-out;
 }
 
 @keyframes scanLaser {
-  0% { top: 0; }
-  50% { top: 100%; }
-  100% { top: 0; }
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, 100cqh, 0); }
 }
 
 .scanner-error {
